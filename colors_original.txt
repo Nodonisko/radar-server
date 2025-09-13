@@ -1,0 +1,17 @@
+    colors_list_original = [
+        '#390071', # 4 dBZ,
+        '#3001A9', # 8 dBZ,
+        '#0200FB', # 12 dBZ,
+        '#076CBC', # 16 dBZ,
+        '#00A400', # 20 dBZ,
+        '#00BB03', # 24 dBZ,
+        '#36D700', # 28 dBZ,
+        '#9CDD07', # 32 dBZ,
+        '#E0DC01', # 36 dBZ,
+        '#FBB200', # 40 dBZ,
+        '#F78600', # 44 dBZ,
+        '#FF5400', # 48 dBZ,
+        '#FE0100', # 52 dBZ,
+        '#A40003', # 56 dBZ,
+        '#FCFCFC' # 60 dBZ,
+    ]
