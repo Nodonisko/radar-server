@@ -1,0 +1,26 @@
+# Output folder for generated images
+output/
+radar_data/
+radar_data_forecast/
+output_forecast/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environment
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
