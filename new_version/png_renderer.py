@@ -71,14 +71,12 @@ def _optimize_png(temp_path: Path, final_path: Path) -> None:
     # Quantization phase
     quantize_start = time.perf_counter()
     with Image.open(temp_path) as image:
-        optimized = image.copy()
-        if optimized.mode == "RGBA":
-            optimized = optimized.quantize(colors=64, method=Image.FASTOCTREE, dither=Image.Dither.NONE)
+        optimized = image.quantize(colors=16, method=Image.FASTOCTREE, dither=Image.Dither.NONE)
         quantize_time = time.perf_counter() - quantize_start
 
-        # Save phase
+        # Save phase - minimal options since oxipng handles compression
         save_start = time.perf_counter()
-        optimized.save(temp_path, format="PNG", optimize=True, compress_level=9)
+        optimized.save(temp_path, format="PNG")
         save_time = time.perf_counter() - save_start
 
     # oxipng phase
