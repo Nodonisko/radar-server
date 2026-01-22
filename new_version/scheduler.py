@@ -186,6 +186,13 @@ class RadarScheduler:
                 )
             final_offset = delta_minutes
 
+            # Check if forecast overlay already exists
+            # Use radar_timestamp (forecast generation time) since that's what the PNG filename uses
+            overlay_name = f"radar_{radar_timestamp.strftime('%Y%m%d_%H%M')}_forecast_fct{final_offset:02d}_overlay.png"
+            if (self.config.storage.forecast_output_dir / overlay_name).exists():
+                LOGGER.debug("Forecast overlay already exists for offset %d, skipping", final_offset)
+                continue
+
             candidates.append((final_offset, hdf_file))
 
         candidates.sort(key=lambda item: item[0])
