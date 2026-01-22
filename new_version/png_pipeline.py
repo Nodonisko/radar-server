@@ -9,8 +9,8 @@ from typing import Dict, List
 
 from .config import CONFIG
 from .hdf_reader import load_radar_hdf
-from .naming import background_filename, overlay_filename
-from .png_renderer import render_main_map, render_overlays
+from .naming import overlay_filename
+from .png_renderer import render_overlays
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,18 +23,22 @@ def generate_pngs(hdf_path: Path, forecast: bool = False, offset_minutes: int | 
         raise ValueError("forecast PNG generation requires offset_minutes")
 
     output_dir = CONFIG.storage.forecast_output_dir if forecast else CONFIG.storage.radar_output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    background_name = background_filename(ts, forecast=forecast, offset=offset_minutes)
-    background_path = output_dir / background_name
-    background_path.parent.mkdir(parents=True, exist_ok=True)
+    # Create a base path for temporary overlay generation
+    # Using timestamp stub as the base name
+    ts_stub = ts.strftime("%Y%m%d_%H%M")
+    suffix = ""
+    if forecast and offset_minutes is not None:
+        suffix = f"_forecast_fct{offset_minutes:02d}"
+    elif forecast:
+        suffix = "_forecast"
+    base_name = f"radar_{ts_stub}{suffix}.png"
+    base_path = output_dir / base_name
 
     result = {}
 
-    if not forecast:
-        render_main_map(product, background_path)
-        result = {"background": background_path}
-
-    overlays = render_overlays(product, background_path.with_suffix(".png"))
+    overlays = render_overlays(product, base_path)
 
     for variant, path in overlays.items():
         overlay_name = overlay_filename(ts, variant, forecast=forecast, offset=offset_minutes)

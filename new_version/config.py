@@ -23,8 +23,8 @@ def _get_optimize_workers() -> int:
 @dataclass(frozen=True)
 class TimingConfig:
     publish_interval: int = 300  # seconds
-    quick_check_interval: int = 10  # seconds
-    quick_check_limit: int = 30
+    quick_check_interval: int = 3  # seconds
+    quick_check_limit: int = 90
 
 
 @dataclass(frozen=True)

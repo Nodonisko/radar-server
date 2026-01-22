@@ -1,18 +1,6 @@
 from datetime import datetime
 
-from new_version.naming import background_filename, overlay_filename, extract_forecast_timestamp
-
-
-def test_background_filename():
-    ts = datetime(2025, 9, 26, 20, 20)
-    assert (
-        background_filename(ts)
-        == "background_radar_20250926_2020_300.png"
-    )
-    assert (
-        background_filename(ts, forecast=True, offset=5)
-        == "background_radar_20250926_2020_forecast_fct05_300.png"
-    )
+from new_version.naming import overlay_filename, extract_forecast_timestamp
 
 
 def test_overlay_filename():

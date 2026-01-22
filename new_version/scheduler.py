@@ -10,7 +10,7 @@ from pathlib import Path
 from .config import CONFIG
 from .downloader import download_file, download_tar, iter_latest, list_remote_files
 from .forecast import extract_forecast_tar
-from .naming import background_filename, extract_timestamp, extract_forecast_timestamp
+from .naming import extract_timestamp, extract_forecast_timestamp
 from .png_pipeline import generate_pngs, generate_pngs_batch
 
 LOGGER = logging.getLogger(__name__)
@@ -40,9 +40,10 @@ class RadarScheduler:
         entries = list_remote_files(self.config.sources.radar_base_url)
         return iter_latest(entries, self.config.storage.min_tracked_files)
 
-    def _background_exists(self, ts: datetime) -> bool:
-        background = self.config.storage.radar_output_dir / background_filename(ts)
-        return background.exists()
+    def _overlay_exists(self, ts: datetime) -> bool:
+        """Check if overlay PNG exists for the given timestamp."""
+        overlay = self.config.storage.radar_output_dir / f"radar_{ts.strftime('%Y%m%d_%H%M')}_overlay.png"
+        return overlay.exists()
 
     def _ensure_radar_backlog(self) -> tuple[bool, datetime | None, bool]:
         entries = self._radar_entries()
@@ -52,7 +53,7 @@ class RadarScheduler:
 
         latest_timestamp = extract_timestamp(entries[0]) if entries else None
         processed_any = False
-        latest_background_exists = False
+        latest_overlay_exists = False
 
         # Collect files to process in batches
         files_to_process = []
@@ -69,8 +70,8 @@ class RadarScheduler:
                     continue
                 processed_any = True
 
-            background_path = self.config.storage.radar_output_dir / background_filename(ts)
-            if not background_path.exists():
+            overlay_path = self.config.storage.radar_output_dir / f"radar_{ts.strftime('%Y%m%d_%H%M')}_overlay.png"
+            if not overlay_path.exists():
                 files_to_process.append(local_path)
 
         # Process files in parallel batches if any need processing
@@ -86,8 +87,8 @@ class RadarScheduler:
                 self.processed_radar[filename] = ts
 
                 if latest_timestamp and ts == latest_timestamp:
-                    background_path = self.config.storage.radar_output_dir / background_filename(ts)
-                    latest_background_exists = background_path.exists()
+                    overlay_path = self.config.storage.radar_output_dir / f"radar_{ts.strftime('%Y%m%d_%H%M')}_overlay.png"
+                    latest_overlay_exists = overlay_path.exists()
 
         # Keep processed map constrained to tracked files. Any missing image
         # within the window is regenerated immediately, so historical data stays
@@ -95,7 +96,7 @@ class RadarScheduler:
         self.processed_radar = {fname: ts for fname, ts in self.processed_radar.items() if fname in entries}
         self._prune_radar_outputs()
 
-        return processed_any, latest_timestamp, latest_background_exists
+        return processed_any, latest_timestamp, latest_overlay_exists
 
     def _process_radar_batch(self, hdf_paths: list[Path]) -> list[datetime]:
         """Process multiple radar files in parallel."""
@@ -222,18 +223,22 @@ class RadarScheduler:
         limit = self.config.storage.max_tracked_files
         if limit <= 0:
             return
-        backgrounds = sorted(self.config.storage.radar_output_dir.glob("background_radar_*_300.png"))
-        keep_backgrounds = backgrounds[-limit:]
+        # Use overlay files to determine which timestamps to keep
+        overlays = sorted(self.config.storage.radar_output_dir.glob("radar_*_overlay.png"))
+        keep_overlays = overlays[-limit:]
         keep_stubs = {
-            f"{bg.stem.split('_')[2]}_{bg.stem.split('_')[3]}" for bg in keep_backgrounds if len(bg.stem.split('_')) >= 4
+            f"{ov.stem.split('_')[1]}_{ov.stem.split('_')[2]}" for ov in keep_overlays if len(ov.stem.split('_')) >= 3
         }
-        for path in backgrounds[:-limit]:
-            path.unlink(missing_ok=True)
-        overlays = sorted(self.config.storage.radar_output_dir.glob("radar_*.png"))
-        for overlay in overlays:
+        # Remove old overlay variants that are no longer in the retention window
+        all_overlays = sorted(self.config.storage.radar_output_dir.glob("radar_*.png"))
+        for overlay in all_overlays:
             parts = overlay.stem.split("_")
             if len(parts) >= 3 and f"{parts[1]}_{parts[2]}" not in keep_stubs:
                 overlay.unlink(missing_ok=True)
+        # Clean up legacy background files if any exist
+        old_backgrounds = sorted(self.config.storage.radar_output_dir.glob("background_radar_*.png"))
+        for path in old_backgrounds:
+            path.unlink(missing_ok=True)
         archives = sorted(self.config.storage.radar_data_dir.glob("*.hdf"))
         for path in archives[:-limit]:
             path.unlink(missing_ok=True)
@@ -241,7 +246,7 @@ class RadarScheduler:
     def run_cycle(self) -> bool:
         processed_new, latest_timestamp, latest_ready = self._ensure_radar_backlog()
 
-        # Process forecast if we have new radar data, regardless of whether the latest background is ready
+        # Process forecast if we have new radar data, regardless of whether the latest overlay is ready
         # The forecast processing will handle the timestamp matching internally
         if latest_timestamp:
             tar_path = self._download_forecast_tar()

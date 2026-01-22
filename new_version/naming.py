@@ -22,13 +22,6 @@ def timestamp_stub(ts: datetime) -> str:
     return ts.strftime("%Y%m%d_%H%M")
 
 
-def background_filename(ts: datetime, forecast: bool = False, offset: Optional[int] = None) -> str:
-    suffix = ""
-    if forecast:
-        suffix = f"_forecast_fct{offset:02d}" if offset is not None else "_forecast"
-    return f"background_radar_{timestamp_stub(ts)}{suffix}_300.png"
-
-
 def overlay_filename(ts: datetime, variant: str, forecast: bool = False, offset: Optional[int] = None) -> str:
     suffix = ""
     if forecast:
