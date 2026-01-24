@@ -186,11 +186,13 @@ class RadarScheduler:
                 )
             final_offset = delta_minutes
 
-            # Check if forecast overlay already exists
-            # Use radar_timestamp (forecast generation time) since that's what the PNG filename uses
-            overlay_name = f"radar_{radar_timestamp.strftime('%Y%m%d_%H%M')}_forecast_fct{final_offset:02d}_overlay.png"
-            if (self.config.storage.forecast_output_dir / overlay_name).exists():
-                LOGGER.debug("Forecast overlay already exists for offset %d, skipping", final_offset)
+            # Skip only if both variants already exist.
+            # Use radar_timestamp (forecast generation time) since that's what the PNG filename uses.
+            overlay_stub = f"radar_{radar_timestamp.strftime('%Y%m%d_%H%M')}_forecast_fct{final_offset:02d}"
+            overlay_path = self.config.storage.forecast_output_dir / f"{overlay_stub}_overlay.png"
+            overlay2x_path = self.config.storage.forecast_output_dir / f"{overlay_stub}_overlay2x.png"
+            if overlay_path.exists() and overlay2x_path.exists():
+                LOGGER.debug("Forecast overlays already exist for offset %d, skipping", final_offset)
                 continue
 
             candidates.append((final_offset, hdf_file))
