@@ -58,7 +58,7 @@ def _run_oxipng(path: Path) -> None:
         raise RuntimeError(f"oxipng optimization failed for {path.name}: {result.stderr.strip()}")
 
 
-def _optimize_png(temp_path: Path, final_path: Path) -> None:
+def _optimize_png(temp_path: Path, final_path: Path, colors: int = 16) -> None:
     """Optimize PNG from temp_path and atomically rename to final_path."""
     if not temp_path.exists():
         raise FileNotFoundError(temp_path)
@@ -71,7 +71,7 @@ def _optimize_png(temp_path: Path, final_path: Path) -> None:
     # Quantization phase
     quantize_start = time.perf_counter()
     with Image.open(temp_path) as image:
-        optimized = image.quantize(colors=16, method=Image.FASTOCTREE, dither=Image.Dither.NONE)
+        optimized = image.quantize(colors=colors, method=Image.FASTOCTREE, dither=Image.Dither.NONE)
         quantize_time = time.perf_counter() - quantize_start
 
         # Save phase - minimal options since oxipng handles compression
@@ -201,6 +201,108 @@ def render_overlays(product: RadarProduct, base_path: Path) -> Dict[str, Path]:
         # Wait for all optimizations to complete
         for future in as_completed(future_to_paths):
             future.result()  # Will raise exception if optimization failed
+
+    return overlays
+
+def _create_extended_colormap() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
+    cmap = mcolors.ListedColormap(CONFIG.rendering.extended_color_steps)
+    bounds = list(range(-12, 68, 4))
+    return cmap, mcolors.BoundaryNorm(bounds, cmap.N)
+
+
+def _mask_reflectivity_extended(data: np.ndarray) -> np.ndarray:
+    masked = data.copy()
+    masked[masked < -12] = np.nan
+    return masked
+
+def _render_single_overlay_extended(
+    product: RadarProduct,
+    base_path: Path,
+    name: str,
+    dpi: int,
+    scale: int,
+) -> Tuple[str, Path, Path]:
+    """Render a single extended overlay variant to a temp file."""
+    start_time = time.perf_counter()
+
+    cmap, norm = _create_extended_colormap()
+    lon_min, lon_max, lat_min, lat_max = product.metadata.bounds
+    projection_extent = [lon_min, lon_max, lat_max, lat_min]
+
+    target_width = product.metadata.grid_shape[1] * scale
+    target_height = product.metadata.grid_shape[0] * scale
+    figsize = (target_width / dpi, target_height / dpi)
+
+    # Matplotlib rendering phase
+    render_start = time.perf_counter()
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis("off")
+    masked = _mask_reflectivity_extended(product.data)
+    ax.imshow(
+        masked,
+        extent=projection_extent,
+        cmap=cmap,
+        norm=norm,
+        interpolation="nearest",
+        origin="upper",
+        aspect="auto",
+    )
+    plt.subplots_adjust(0, 0, 1, 1)
+    render_time = time.perf_counter() - render_start
+
+    final_path = base_path.with_name(f"{base_path.stem}_{name}{base_path.suffix}")
+    temp_path = final_path.with_suffix(".tmp.png")
+
+    # Matplotlib save phase
+    save_start = time.perf_counter()
+    fig.savefig(temp_path, dpi=dpi, transparent=True, bbox_inches="tight", pad_inches=0)
+    save_time = time.perf_counter() - save_start
+    plt.close(fig)
+
+    total_time = time.perf_counter() - start_time
+    LOGGER.info(
+        "Rendered %s extended overlay at %dx%d | render=%.0fms save=%.0fms total=%.0fms",
+        name,
+        target_width,
+        target_height,
+        render_time * 1000,
+        save_time * 1000,
+        total_time * 1000,
+    )
+
+    return name, temp_path, final_path
+
+def render_overlays_extended(product: RadarProduct, base_path: Path) -> Dict[str, Path]:
+    """Render extended overlay variants in parallel."""
+    overlay_configs = [
+        ("overlay", CONFIG.rendering.overlay_target_dpi, 1),
+        ("overlay2x", CONFIG.rendering.overlay_retina_dpi, 2),
+    ]
+
+    # Submit all overlay rendering tasks to thread pool
+    with ThreadPoolExecutor(max_workers=CONFIG.rendering.max_workers) as executor:
+        future_to_config = {
+            executor.submit(_render_single_overlay_extended, product, base_path, name, dpi, scale): (name, dpi, scale)
+            for name, dpi, scale in overlay_configs
+        }
+
+        overlays = {}
+        temp_to_final = {}
+        for future in as_completed(future_to_config):
+            name, temp_path, final_path = future.result()
+            overlays[name] = final_path
+            temp_to_final[temp_path] = final_path
+
+    # Optimize all overlays in parallel, then atomically rename to final paths
+    color_count = len(CONFIG.rendering.extended_color_steps)
+    with ThreadPoolExecutor(max_workers=CONFIG.rendering.optimize_workers) as executor:
+        future_to_paths = {
+            executor.submit(_optimize_png, temp_path, final_path, color_count): (temp_path, final_path)
+            for temp_path, final_path in temp_to_final.items()
+        }
+
+        for future in as_completed(future_to_paths):
+            future.result()
 
     return overlays
 

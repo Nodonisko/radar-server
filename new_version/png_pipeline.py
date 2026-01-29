@@ -10,7 +10,7 @@ from typing import Dict, List
 from .config import CONFIG
 from .hdf_reader import load_radar_hdf
 from .naming import overlay_filename
-from .png_renderer import render_overlays
+from .png_renderer import render_overlays, render_overlays_extended
 
 LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +76,51 @@ def generate_pngs_batch(hdf_paths: List[Path], forecast: bool = False, offset_mi
                 LOGGER.debug("Completed processing %s", hdf_path.name)
             except Exception as e:
                 LOGGER.error("Failed to process %s: %s", hdf_path.name, e)
+                raise
+
+    return results
+
+def generate_pngs_extended(hdf_path: Path) -> Dict[str, Path]:
+    product = load_radar_hdf(hdf_path)
+    ts = product.metadata.timestamp
+
+    output_dir = CONFIG.storage.extended_output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ts_stub = ts.strftime("%Y%m%d_%H%M")
+    base_name = f"radar_{ts_stub}.png"
+    base_path = output_dir / base_name
+
+    result = {}
+    overlays = render_overlays_extended(product, base_path)
+
+    for variant, path in overlays.items():
+        overlay_name = f"radar_{ts_stub}_{variant}_extended.png"
+        target_path = output_dir / overlay_name
+        path.rename(target_path)
+        result[variant] = target_path
+
+    LOGGER.info("Generated %d extended PNG variants for %s", len(result), hdf_path.name)
+    return result
+
+def generate_pngs_extended_batch(hdf_paths: List[Path]) -> Dict[Path, Dict[str, Path]]:
+    """Generate extended PNGs for multiple HDF files in parallel."""
+    results = {}
+
+    with ThreadPoolExecutor(max_workers=CONFIG.rendering.max_workers) as executor:
+        future_to_path = {
+            executor.submit(generate_pngs_extended, hdf_path): hdf_path
+            for hdf_path in hdf_paths
+        }
+
+        for future in as_completed(future_to_path):
+            hdf_path = future_to_path[future]
+            try:
+                result = future.result()
+                results[hdf_path] = result
+                LOGGER.debug("Completed extended processing %s", hdf_path.name)
+            except Exception as e:
+                LOGGER.error("Failed to process extended %s: %s", hdf_path.name, e)
                 raise
 
     return results

@@ -31,6 +31,7 @@ class TimingConfig:
 class StorageConfig:
     radar_data_dir: Path = BASE_DIR / "radar_data"
     radar_output_dir: Path = BASE_DIR / "output"
+    extended_output_dir: Path = BASE_DIR / "output_extended"
     forecast_data_dir: Path = BASE_DIR / "radar_data_forecast"
     forecast_output_dir: Path = BASE_DIR / "output_forecast"
     min_tracked_files: int = 12
@@ -53,8 +54,30 @@ class SourceConfig:
 
 @dataclass(frozen=True)
 class RenderingConfig:
-    # 4 dBZ steps, values below 4 are transparent
+    # 4 dBZ steps, values below 4 are transparent (from 4 to 64 dBZ)
     color_steps: tuple[str, ...] = (
+        "#390071",
+        "#3001A9",
+        "#0200FB",
+        "#076CBC",
+        "#00A400",
+        "#00BB03",
+        "#36D700",
+        "#9CDD07",
+        "#E0DC01",
+        "#FBB200",
+        "#F78600",
+        "#FF5400",
+        "#FE0100",
+        "#A40003",
+        "#FCFCFC",
+    )
+    # Extended palette adds -12..0 dBZ in lighter tones
+    extended_color_steps: tuple[str, ...] = (
+        "#E0D4EC",  # -12 to -8 dBZ
+        "#C8B8D8",  # -8 to -4 dBZ
+        "#B0A0C8",  # -4 to 0 dBZ
+        "#8B68A8",  # 0-4 dBZ (very light returns)
         "#390071",
         "#3001A9",
         "#0200FB",
@@ -92,6 +115,7 @@ class Config:
         for path in (
             self.storage.radar_data_dir,
             self.storage.radar_output_dir,
+            self.storage.extended_output_dir,
             self.storage.forecast_data_dir,
             self.storage.forecast_output_dir,
         ):

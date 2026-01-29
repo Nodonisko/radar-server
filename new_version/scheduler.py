@@ -11,7 +11,7 @@ from .config import CONFIG
 from .downloader import download_file, download_tar, iter_latest, list_remote_files
 from .forecast import extract_forecast_tar
 from .naming import extract_timestamp, extract_forecast_timestamp
-from .png_pipeline import generate_pngs, generate_pngs_batch
+from .png_pipeline import generate_pngs, generate_pngs_batch, generate_pngs_extended_batch
 
 LOGGER = logging.getLogger(__name__)
 
@@ -121,6 +121,44 @@ class RadarScheduler:
                 LOGGER.warning("No results for %s", hdf_path.name)
 
         return timestamps
+
+    def _ensure_extended_backlog(self) -> bool:
+        """Generate extended overlays for recent radar files if missing."""
+        entries = self._radar_entries()
+        if not entries:
+            return False
+
+        files_to_process: list[Path] = []
+        for filename in reversed(entries):
+            ts = extract_timestamp(filename)
+            if not ts:
+                continue
+
+            standard_overlay = self.config.storage.radar_output_dir / f"radar_{ts.strftime('%Y%m%d_%H%M')}_overlay.png"
+            if not standard_overlay.exists():
+                continue
+
+            extended_overlay = (
+                self.config.storage.extended_output_dir / f"radar_{ts.strftime('%Y%m%d_%H%M')}_overlay_extended.png"
+            )
+            extended_overlay2x = (
+                self.config.storage.extended_output_dir / f"radar_{ts.strftime('%Y%m%d_%H%M')}_overlay2x_extended.png"
+            )
+            if extended_overlay.exists() and extended_overlay2x.exists():
+                continue
+
+            local_path = self.config.storage.radar_data_dir / filename
+            if not local_path.exists():
+                continue
+
+            files_to_process.append(local_path)
+
+        if files_to_process:
+            LOGGER.info("Processing %d extended radar files in parallel", len(files_to_process))
+            generate_pngs_extended_batch(files_to_process)
+
+        self._prune_extended_outputs()
+        return bool(files_to_process)
 
     def _process_radar(self, hdf_path: Path) -> datetime:
         """Legacy single-file processing method for backward compatibility."""
@@ -252,6 +290,22 @@ class RadarScheduler:
         for path in archives[:-limit]:
             path.unlink(missing_ok=True)
 
+    def _prune_extended_outputs(self) -> None:
+        limit = self.config.storage.max_tracked_files
+        if limit <= 0:
+            return
+        # Use standard overlay files to determine which timestamps to keep
+        overlays = sorted(self.config.storage.radar_output_dir.glob("radar_*_overlay.png"))
+        keep_overlays = overlays[-limit:]
+        keep_stubs = {
+            f"{ov.stem.split('_')[1]}_{ov.stem.split('_')[2]}" for ov in keep_overlays if len(ov.stem.split('_')) >= 3
+        }
+        all_overlays = sorted(self.config.storage.extended_output_dir.glob("radar_*.png"))
+        for overlay in all_overlays:
+            parts = overlay.stem.split("_")
+            if len(parts) >= 3 and f"{parts[1]}_{parts[2]}" not in keep_stubs:
+                overlay.unlink(missing_ok=True)
+
     def run_cycle(self) -> bool:
         processed_new, latest_timestamp, latest_ready = self._ensure_radar_backlog()
 
@@ -271,6 +325,9 @@ class RadarScheduler:
                     LOGGER.info("Processing forecast using generation timestamp: %s", forecast_timestamp)
                 else:
                     LOGGER.warning("Could not extract timestamp from forecast TAR: %s", tar_path.name)
+
+        # Extended overlays are low priority and run after standard + forecast processing.
+        self._ensure_extended_backlog()
 
         if latest_ready and latest_timestamp:
             self.next_publish = self._calculate_next_expected(latest_timestamp)

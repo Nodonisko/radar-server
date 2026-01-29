@@ -19,6 +19,7 @@ class RadarStaticRequestHandler(http.server.SimpleHTTPRequestHandler):
     MOUNT_POINTS = {
         "output": CONFIG.storage.radar_output_dir,
         "output_forecast": CONFIG.storage.forecast_output_dir,
+        "output_extended": CONFIG.storage.extended_output_dir,
     }
 
     def translate_path(self, path: str) -> str:  # pragma: no cover - thin wrapper
