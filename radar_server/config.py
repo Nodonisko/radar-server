@@ -108,7 +108,7 @@ class InputAvailabilityPolicy:
 
     retry_interval_seconds: int = 30
     warn_after_seconds: int = 3600
-    expire_after_seconds: int | None = None
+    expire_after_seconds: int | None = 7200
 
 
 VariantSpec = tuple[str, float]
@@ -169,7 +169,6 @@ class HttpDirectorySource:
     label: str
     base_url: str
     polling: SmartPollingPolicy
-    suffixes: tuple[str, ...] = (".hdf", ".h5")
 
 
 @dataclass(frozen=True)
@@ -233,6 +232,7 @@ class InputConfig:
     label: str
     source: SourceConfig
     local_dir: Path
+    file_suffixes: tuple[str, ...] = (".h5", ".hdf")
     quantity: str = "DBZH"
     odim_product: str | None = None
     timestamp_from_name: Callable[[str], datetime | None] = timestamp_from_yyyymmddhhmmss

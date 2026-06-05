@@ -167,7 +167,7 @@ def _discover_http_directory(input_config: InputConfig, source: HttpDirectorySou
     for href in parser.hrefs:
         url = urljoin(source.base_url, href)
         filename = _filename_from_url(url)
-        if not filename.lower().endswith(source.suffixes):
+        if not filename.lower().endswith(input_config.file_suffixes):
             continue
         timestamp = input_config.timestamp_from_name(filename)
         if timestamp is None:
@@ -282,7 +282,7 @@ def _remote_files_from_ord_payload(
         if not isinstance(href, str):
             continue
         filename = _filename_from_url(href)
-        if not filename.lower().endswith((".h5", ".hdf")):
+        if not filename.lower().endswith(input_config.file_suffixes):
             continue
         if f"@{quantity}." not in filename and f"@{quantity}@" not in filename:
             continue
