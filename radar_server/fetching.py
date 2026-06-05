@@ -158,6 +158,17 @@ def download_remote_file(remote: RemoteInputFile) -> LocalInputFile:
     return LocalInputFile(remote.input, remote.timestamp, destination, remote, downloaded=True)
 
 
+def remote_files_from_ord_payload(
+    input_config: InputConfig,
+    payload: dict[str, Any],
+    *,
+    quantity: str,
+) -> list[RemoteInputFile]:
+    """Extract ODIM download links from an ORD CoverageJSON-style payload."""
+
+    return _remote_files_from_ord_payload(input_config, payload, quantity=quantity)
+
+
 def _discover_http_directory(input_config: InputConfig, source: HttpDirectorySource) -> list[RemoteInputFile]:
     response = _request("GET", source.base_url)
     parser = _HrefParser()
@@ -208,10 +219,11 @@ def _discover_ord_location(
     now: datetime | None,
 ) -> list[RemoteInputFile]:
     url = f"{source.api_base_url}/collections/observations/locations/{query.location_id}"
+    lookback_minutes = max(query.lookback_minutes, _input_lookback_minutes(input_config))
     payload = _request_json(
         url,
         params={
-            "datetime": _datetime_window(now, query.lookback_minutes),
+            "datetime": _datetime_window(now, lookback_minutes),
             "standard_name": query.standard_name,
             "format": query.fmt,
             "method": query.method,
@@ -229,11 +241,12 @@ def _discover_ord_items(
     now: datetime | None,
     limit: int | None,
 ) -> list[RemoteInputFile]:
+    lookback_minutes = max(query.lookback_minutes, _input_lookback_minutes(input_config))
     payload = _request_json(
         f"{source.api_base_url}/collections/observations/items",
         params={
             "bbox": _format_bounds(query.bbox),
-            "datetime": _datetime_window(now, query.lookback_minutes),
+            "datetime": _datetime_window(now, lookback_minutes),
             "standard-name": query.standard_name,
             "format": query.fmt,
             "method": query.method,
@@ -254,7 +267,7 @@ def _discover_ord_items(
                 _with_query_params(
                     data_url,
                     {
-                        "datetime": _datetime_window(now, query.lookback_minutes),
+                        "datetime": _datetime_window(now, lookback_minutes),
                         "format": query.fmt,
                         "method": query.method,
                     },
@@ -370,6 +383,13 @@ def _ord_headers(source: OrdApiSource) -> dict[str, str]:
     if not api_key:
         return {}
     return {source.api_key_header: api_key}
+
+
+def _input_lookback_minutes(input_config: InputConfig) -> int:
+    expire_after = input_config.availability.expire_after_seconds
+    if expire_after is None:
+        return 0
+    return max(1, int(expire_after // 60))
 
 
 def _datetime_window(now: datetime | None, lookback_minutes: int) -> str:

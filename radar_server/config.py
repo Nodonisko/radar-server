@@ -88,7 +88,10 @@ class NotificationPolicy:
     host: str
     port: int
     username: str | None = None
+    password: str | None = None
     topic: str | None = None
+    path: str | None = None
+    tls: bool = True
 
 
 @dataclass(frozen=True)
@@ -182,7 +185,16 @@ class OrdApiSource:
     api_key_header: str = "apikey"
     polling: SmartPollingPolicy = SmartPollingPolicy()
     notifications: tuple[NotificationPolicy, ...] = (
-        NotificationPolicy(kind="mqtt", host="mqtt.meteogate.eu", port=8884, username="everyone"),
+        NotificationPolicy(
+            kind="mqtt",
+            host="radar.meteogate.eu",
+            port=8884,
+            username="everyone",
+            password="everyone",
+            topic="ORD/eu.eumetnet/0-20010-0-OPERA/DBZH",
+            path="/ordmqtt",
+            tls=True,
+        ),
     )
 
     def api_key(self) -> str | None:

@@ -4,6 +4,7 @@ output_*/
 radar_data/
 radar_data_forecast/
 output_forecast/
+radar_server/data/
 
 # Python cache
 __pycache__/
