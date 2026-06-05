@@ -7,11 +7,12 @@ cache keys, but config composition should use object references.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Literal, Protocol, Sequence
+from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec
 from .rendering.palettes import STANDARD_DBZH
@@ -21,6 +22,25 @@ from .rendering.pipeline import DEFAULT_VARIANTS, Bounds, RenderResult, render_c
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 OUTPUT_DIR = BASE_DIR / "output"
+ENV_FILE = BASE_DIR.parent / ".env"
+
+
+def _get_env_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if not ENV_FILE.exists():
+        return None
+
+    for line in ENV_FILE.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw_value = stripped.split("=", 1)
+        if key.strip() != name:
+            continue
+        return raw_value.strip().strip("\"'")
+    return None
 
 
 def timestamp_from_yyyymmddhhmmss(value: str) -> datetime | None:
@@ -159,13 +179,20 @@ class OrdApiSource:
     api_base_url: str = "https://api.meteogate.eu/eu-eumetnet-weather-radar"
     s3_endpoint_url: str = "https://s3.waw3-1.cloudferro.com"
     rolling_bucket: str = "openradar-24h"
+    api_key_env: str | None = "METEOGATE_API_KEY"
+    api_key_header: str = "apikey"
     polling: SmartPollingPolicy = SmartPollingPolicy()
     notifications: tuple[NotificationPolicy, ...] = (
         NotificationPolicy(kind="mqtt", host="mqtt.meteogate.eu", port=8884, username="everyone"),
     )
 
+    def api_key(self) -> str | None:
+        if self.api_key_env is None:
+            return None
+        return _get_env_value(self.api_key_env)
 
-SourceConfig = HttpDirectorySource | OrdApiSource
+
+SourceConfig = Union[HttpDirectorySource, OrdApiSource]
 
 
 @dataclass(frozen=True)
@@ -316,47 +343,6 @@ opera_dbzh = InputConfig(
     ),
 )
 
-de_dbzh = InputConfig(
-    id="de_dbzh",
-    label="Germany ORD DBZH scans",
-    source=ord_api,
-    local_dir=DATA_DIR / "de" / "ord_dbzh",
-    timestamp_from_name=timestamp_from_ord_name,
-    remote_query=OrdItemsQuery(
-        bbox=GERMANY_BOUNDS,
-        naming_authority="de.dwd",
-        platform_code_prefixes=("de",),
-    ),
-)
-
-pl_dbzh = InputConfig(
-    id="pl_dbzh",
-    label="Poland ORD DBZH scans",
-    source=ord_api,
-    local_dir=DATA_DIR / "pl" / "ord_dbzh",
-    timestamp_from_name=timestamp_from_ord_name,
-    remote_query=OrdItemsQuery(
-        bbox=POLAND_BOUNDS,
-        naming_authority="pl.imgw",
-        platform_code_prefixes=("pl",),
-    ),
-)
-
-sk_dbzh = InputConfig(
-    id="sk_dbzh",
-    label="Slovakia ORD DBZH scans",
-    source=ord_api,
-    local_dir=DATA_DIR / "sk" / "ord_dbzh",
-    timestamp_from_name=timestamp_from_ord_name,
-    remote_query=OrdItemsQuery(
-        bbox=SLOVAKIA_BOUNDS,
-        naming_authority="sk.shmu",
-        platform_code_prefixes=("sk",),
-        notes="Validate naming_authority against the live ORD response before wiring downloads.",
-    ),
-    status="provisional",
-)
-
 cz_product = ProductConfig(
     id="cz",
     label="Czechia radar",
@@ -369,7 +355,7 @@ cz_product = ProductConfig(
 de_product = ProductConfig(
     id="de",
     label="Germany radar",
-    inputs=inputs(de_dbzh),
+    inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "de",
     geo_bounds=GERMANY_BOUNDS,
     base_name=timestamped_base("radar_de"),
@@ -378,7 +364,7 @@ de_product = ProductConfig(
 pl_product = ProductConfig(
     id="pl",
     label="Poland radar",
-    inputs=inputs(pl_dbzh),
+    inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "pl",
     geo_bounds=POLAND_BOUNDS,
     base_name=timestamped_base("radar_pl"),
@@ -387,7 +373,7 @@ pl_product = ProductConfig(
 sk_product = ProductConfig(
     id="sk",
     label="Slovakia radar",
-    inputs=inputs(sk_dbzh),
+    inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "sk",
     geo_bounds=SLOVAKIA_BOUNDS,
     base_name=timestamped_base("radar_sk"),
@@ -413,7 +399,7 @@ central_europe_product = ProductConfig(
 
 
 SOURCES: tuple[SourceConfig, ...] = (chmi_current, ord_api)
-INPUTS: tuple[InputConfig, ...] = (cz_maxz, opera_dbzh, de_dbzh, pl_dbzh, sk_dbzh)
+INPUTS: tuple[InputConfig, ...] = (cz_maxz, opera_dbzh)
 COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     cz_product,
     de_product,
