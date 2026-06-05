@@ -73,10 +73,10 @@ class InputRegistry:
             return
 
         for input_config in inputs:
-            expire_after = input_config.availability.expire_after_seconds
-            if expire_after is None:
+            keep_for = input_config.retention.keep_for_seconds
+            if keep_for is None:
                 continue
-            cutoff = reference - timedelta(seconds=expire_after)
+            cutoff = reference - timedelta(seconds=keep_for)
             self.prune_input(input_config, cutoff=cutoff)
 
     def prune_input(self, input_config: InputConfig, *, cutoff: datetime) -> None:
@@ -116,10 +116,10 @@ def _scan_local_input(input_config: InputConfig, *, cutoff: datetime | None = No
 
 
 def _input_cutoff(input_config: InputConfig, *, now: datetime | None) -> datetime | None:
-    expire_after = input_config.availability.expire_after_seconds
-    if expire_after is None:
+    keep_for = input_config.retention.keep_for_seconds
+    if keep_for is None:
         return None
-    return (now or datetime.utcnow()) - timedelta(seconds=expire_after)
+    return (now or datetime.utcnow()) - timedelta(seconds=keep_for)
 
 
 def _dedupe_local_files(files: Iterable[LocalInputFile]) -> tuple[LocalInputFile, ...]:

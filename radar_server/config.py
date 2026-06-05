@@ -96,8 +96,7 @@ class NotificationPolicy:
 
 @dataclass(frozen=True)
 class RetentionPolicy:
-    keep_inputs: int = 600
-    keep_outputs: int = 600
+    keep_for_seconds: int | None = 7200
 
 
 @dataclass(frozen=True)
@@ -111,7 +110,6 @@ class InputAvailabilityPolicy:
 
     retry_interval_seconds: int = 30
     warn_after_seconds: int = 3600
-    expire_after_seconds: int | None = 7200
 
 
 VariantSpec = tuple[str, float]
@@ -250,6 +248,7 @@ class InputConfig:
     timestamp_from_name: Callable[[str], datetime | None] = timestamp_from_yyyymmddhhmmss
     remote_query: OrdItemsQuery | OrdLocationQuery | None = None
     availability: InputAvailabilityPolicy = InputAvailabilityPolicy()
+    retention: RetentionPolicy = RetentionPolicy()
     status: Literal["ready", "provisional"] = "ready"
     enabled: bool = True
 

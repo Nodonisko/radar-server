@@ -386,10 +386,10 @@ def _ord_headers(source: OrdApiSource) -> dict[str, str]:
 
 
 def _input_lookback_minutes(input_config: InputConfig) -> int:
-    expire_after = input_config.availability.expire_after_seconds
-    if expire_after is None:
+    keep_for = input_config.retention.keep_for_seconds
+    if keep_for is None:
         return 0
-    return max(1, int(expire_after // 60))
+    return max(1, int(keep_for // 60))
 
 
 def _datetime_window(now: datetime | None, lookback_minutes: int) -> str:

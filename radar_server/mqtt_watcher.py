@@ -16,6 +16,7 @@ from typing import Iterable
 
 from .config import CONFIG, InputConfig, NotificationPolicy, OrdApiSource, OrdLocationQuery, ProductConfig
 from .fetching import LocalInputFile, download_remote_file, remote_files_from_ord_payload
+from .pruning import prune_all
 from .registry import InputRegistry
 from .render_jobs import render_ready_jobs
 from .rendering.pipeline import RenderResult
@@ -70,6 +71,7 @@ class MqttWatcher:
                 self.registry.add(downloaded)
                 self.registry.prune(self.inputs)
             rendered = tuple(render_ready_jobs(self.registry, self.products))
+            prune_all(inputs=self.inputs, products=self.products)
         return MqttHandleResult(
             topic=topic,
             matched_inputs=matched_inputs,

@@ -9,6 +9,7 @@ from typing import Callable, Iterable
 
 from .config import CONFIG, InputConfig, RadarServerConfig, SourceConfig
 from .fetching import InputSyncResult, sync_inputs
+from .pruning import prune_all
 from .registry import InputRegistry
 from .render_jobs import render_ready_jobs
 from .rendering.pipeline import RenderResult
@@ -83,6 +84,7 @@ class RadarScheduler:
         self.registry.add_sync_results(synced)
         self.registry.prune(self.config.inputs, now=reference)
         rendered = tuple(self.render_func(self.registry, self.config.products))
+        prune_all(inputs=self.config.inputs, products=self.config.products, now=reference)
         return SchedulerCycleResult(synced=synced, rendered=rendered)
 
     def step(self, now: datetime | None = None) -> SchedulerCycleResult | None:
@@ -160,11 +162,11 @@ class RadarScheduler:
 def _default_limit_per_input(inputs: tuple[InputConfig, ...]) -> int | None:
     limits: list[int] = []
     for input_config in inputs:
-        expire_after = input_config.availability.expire_after_seconds
-        if expire_after is None:
+        keep_for = input_config.retention.keep_for_seconds
+        if keep_for is None:
             continue
         period = max(1, input_config.source.polling.expected_period_seconds)
-        limits.append(max(1, int(expire_after // period) + 2))
+        limits.append(max(1, int(keep_for // period) + 2))
     if not limits:
         return None
     return max(limits)

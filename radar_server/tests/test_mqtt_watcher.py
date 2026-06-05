@@ -50,6 +50,7 @@ def test_handle_message_downloads_matching_ord_payload(monkeypatch, tmp_path) ->
 
     monkeypatch.setattr("radar_server.mqtt_watcher.download_remote_file", fake_download)
     monkeypatch.setattr("radar_server.mqtt_watcher.render_ready_jobs", fake_render)
+    monkeypatch.setattr("radar_server.mqtt_watcher.prune_all", lambda **kwargs: None)
     payload = {
         "links": [
             {
