@@ -1,0 +1,11 @@
+# HDF5 radar data is binary: no text diff, no merge, no EOL normalization.
+*.h5  binary
+*.hdf binary
+
+# Generated, binary test fixtures: exclude from GitHub language stats and
+# collapse in diffs. Regenerate via radar_server/tests/fixtures/build_fixtures.py.
+radar_server/tests/fixtures/*.h5 linguist-generated
+
+# Snapshot reference images are binary; left visible (NOT linguist-generated) so
+# image diffs render in review.
+radar_server/tests/snapshots/*.png binary

@@ -25,3 +25,6 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Snapshot test failure artifacts (references are committed; .actual.png are not)
+*.actual.png
