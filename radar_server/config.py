@@ -1,0 +1,437 @@
+"""Python config-as-code for radar inputs, products, and rendering targets.
+
+This module intentionally links config objects directly instead of by string
+references. String IDs still exist for logs, state files, output sidecars, and
+cache keys, but config composition should use object references.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Iterable, Literal, Protocol, Sequence
+
+from .rendering.core import PaletteSpec
+from .rendering.palettes import STANDARD_DBZH
+from .rendering.pipeline import DEFAULT_VARIANTS, Bounds, RenderResult, render_composite_png, render_radar_png
+
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+OUTPUT_DIR = BASE_DIR / "output"
+
+
+def timestamp_from_yyyymmddhhmmss(value: str) -> datetime | None:
+    """Extract the first YYYYMMDDhhmmss timestamp from a filename or URL."""
+
+    match = re.search(r"(\d{8})(\d{6})", value)
+    if match is None:
+        return None
+    return datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S")
+
+
+def timestamp_from_ord_name(value: str) -> datetime | None:
+    """Extract timestamps from ORD names such as OPERA@20260604T0220@0@DBZH.h5."""
+
+    match = re.search(r"(\d{8})T(\d{4})(\d{2})?", value)
+    if match is None:
+        return timestamp_from_yyyymmddhhmmss(value)
+    date_part, hour_minute, seconds = match.groups()
+    return datetime.strptime(f"{date_part}{hour_minute}{seconds or '00'}", "%Y%m%d%H%M%S")
+
+
+@dataclass(frozen=True)
+class GeoBounds:
+    """Lon/lat bounds in EPSG:4326: west, south, east, north."""
+
+    west: float
+    south: float
+    east: float
+    north: float
+
+
+@dataclass(frozen=True)
+class SmartPollingPolicy:
+    """Polling policy compatible with the old quick-polling scheduler behavior."""
+
+    expected_period_seconds: int = 300
+    baseline_interval_seconds: int = 300
+    quick_check_interval_seconds: int = 3
+    quick_check_limit: int = 90
+
+
+@dataclass(frozen=True)
+class NotificationPolicy:
+    kind: Literal["mqtt"]
+    host: str
+    port: int
+    username: str | None = None
+    topic: str | None = None
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    keep_inputs: int = 600
+    keep_outputs: int = 600
+
+
+@dataclass(frozen=True)
+class InputAvailabilityPolicy:
+    """How the input layer should revisit missing expected timestamps.
+
+    This mirrors the old scheduler's backlog behavior: missing inputs stay in
+    the tracked window and are retried. Products only observe whether their
+    configured inputs are available.
+    """
+
+    retry_interval_seconds: int = 30
+    warn_after_seconds: int = 3600
+    expire_after_seconds: int | None = None
+
+
+VariantSpec = tuple[str, float]
+
+
+class SingleFileRenderer(Protocol):
+    def __call__(
+        self,
+        hdf_path: Path,
+        output_dir: Path,
+        palette: PaletteSpec,
+        *,
+        base: str,
+        variants: Sequence[VariantSpec] = DEFAULT_VARIANTS,
+        optimize: bool = True,
+    ) -> RenderResult: ...
+
+
+class CompositeRenderer(Protocol):
+    def __call__(
+        self,
+        hdf_paths: Iterable[Path],
+        output_dir: Path,
+        palette: PaletteSpec,
+        *,
+        base: str,
+        bounds: Bounds | None = None,
+        variants: Sequence[VariantSpec] = DEFAULT_VARIANTS,
+        optimize: bool = True,
+    ) -> RenderResult: ...
+
+
+@dataclass(frozen=True)
+class RenderPipeline:
+    id: str
+    render_single: SingleFileRenderer
+    render_composite: CompositeRenderer
+
+
+DEFAULT_RENDER_PIPELINE = RenderPipeline(
+    id="default_png",
+    render_single=render_radar_png,
+    render_composite=render_composite_png,
+)
+
+
+@dataclass(frozen=True)
+class RenderProfile:
+    pipeline: RenderPipeline = DEFAULT_RENDER_PIPELINE
+    palette: PaletteSpec = STANDARD_DBZH
+    variants: tuple[VariantSpec, ...] = DEFAULT_VARIANTS
+    optimize: bool = True
+
+
+@dataclass(frozen=True)
+class HttpDirectorySource:
+    id: str
+    label: str
+    base_url: str
+    polling: SmartPollingPolicy
+    suffixes: tuple[str, ...] = (".hdf", ".h5")
+
+
+@dataclass(frozen=True)
+class OrdApiSource:
+    id: str
+    label: str
+    api_base_url: str = "https://api.meteogate.eu/eu-eumetnet-weather-radar"
+    s3_endpoint_url: str = "https://s3.waw3-1.cloudferro.com"
+    rolling_bucket: str = "openradar-24h"
+    polling: SmartPollingPolicy = SmartPollingPolicy()
+    notifications: tuple[NotificationPolicy, ...] = (
+        NotificationPolicy(kind="mqtt", host="mqtt.meteogate.eu", port=8884, username="everyone"),
+    )
+
+
+SourceConfig = HttpDirectorySource | OrdApiSource
+
+
+@dataclass(frozen=True)
+class OrdItemsQuery:
+    """ORD API discovery query for collections/observations/items.
+
+    The downloader can later turn matching response features into concrete ODIM
+    download URLs using each feature's ``properties.data`` link. ORD's actual
+    HTTP parameters are hyphenated, e.g. ``standard-name`` and
+    ``naming-authority``.
+    """
+
+    bbox: GeoBounds
+    standard_name: str = "DBZH"
+    fmt: str = "ODIM"
+    method: str = "scan"
+    naming_authority: str | None = None
+    platform_code_prefixes: tuple[str, ...] = ()
+    lookback_minutes: int = 30
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class OrdLocationQuery:
+    """ORD API query for collections/observations/locations/{location_id}."""
+
+    location_id: str
+    standard_name: str = "DBZH"
+    fmt: str = "ODIM"
+    method: Literal["comp", "scan"] = "comp"
+    lookback_minutes: int = 30
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class InputConfig:
+    id: str
+    label: str
+    source: SourceConfig
+    local_dir: Path
+    quantity: str = "DBZH"
+    odim_product: str | None = None
+    timestamp_from_name: Callable[[str], datetime | None] = timestamp_from_yyyymmddhhmmss
+    remote_query: OrdItemsQuery | OrdLocationQuery | None = None
+    availability: InputAvailabilityPolicy = InputAvailabilityPolicy()
+    status: Literal["ready", "provisional"] = "ready"
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class RenderContext:
+    product: ProductConfig
+    timestamp: datetime
+
+
+BaseNameFactory = Callable[[RenderContext], str]
+
+
+@dataclass(frozen=True)
+class ProductConfig:
+    """A configured render target.
+
+    Products with multiple inputs match files by exact timestamp. European radar
+    products are expected to publish on the same standardized five-minute grid.
+    """
+
+    id: str
+    label: str
+    inputs: tuple[InputConfig, ...]
+    output_dir: Path
+    geo_bounds: GeoBounds | None
+    base_name: BaseNameFactory
+    render: RenderProfile = RenderProfile()
+    warn_if_pending_after_seconds: int = 3600
+    retention: RetentionPolicy = RetentionPolicy()
+    enabled: bool = True
+
+
+def inputs(*items: InputConfig) -> tuple[InputConfig, ...]:
+    """Tiny helper so product config reads like inputs(cz, de)."""
+
+    return items
+
+
+def timestamped_base(prefix: str) -> BaseNameFactory:
+    def base_name(ctx: RenderContext) -> str:
+        return f"{prefix}_{ctx.timestamp:%Y%m%d_%H%M}"
+
+    return base_name
+
+
+CHMI_SMART_POLLING = SmartPollingPolicy(
+    expected_period_seconds=300,
+    baseline_interval_seconds=300,
+    quick_check_interval_seconds=3,
+    quick_check_limit=90,
+)
+
+ORD_SMART_POLLING = SmartPollingPolicy(
+    expected_period_seconds=300,
+    baseline_interval_seconds=300,
+    quick_check_interval_seconds=10,
+    quick_check_limit=30,
+)
+
+
+chmi_current = HttpDirectorySource(
+    id="chmi_current",
+    label="CHMI current MAX-Z composites",
+    base_url="https://opendata.chmi.cz/meteorology/weather/radar/composite/maxz/hdf5/",
+    polling=CHMI_SMART_POLLING,
+)
+
+ord_api = OrdApiSource(
+    id="ord_api",
+    label="EUMETNET Open Radar Data API",
+    polling=ORD_SMART_POLLING,
+)
+
+
+CZECHIA_BOUNDS = GeoBounds(west=11.8, south=48.45, east=19.1, north=51.15)
+GERMANY_BOUNDS = GeoBounds(west=5.5, south=47.2, east=15.2, north=55.2)
+POLAND_BOUNDS = GeoBounds(west=14.1, south=49.0, east=24.2, north=54.9)
+SLOVAKIA_BOUNDS = GeoBounds(west=16.8, south=47.7, east=22.6, north=49.7)
+AUSTRIA_BOUNDS = GeoBounds(west=9.4, south=46.3, east=17.2, north=49.1)
+CENTRAL_EUROPE_BOUNDS = GeoBounds(west=5.5, south=46.0, east=24.2, north=55.2)
+
+
+cz_maxz = InputConfig(
+    id="cz_maxz",
+    label="Czechia CHMI MAX-Z composite",
+    source=chmi_current,
+    local_dir=DATA_DIR / "cz" / "chmi_maxz",
+    quantity="DBZH",
+    odim_product="MAX",
+)
+
+opera_dbzh = InputConfig(
+    id="opera_dbzh",
+    label="EUMETNET OPERA DBZH composite",
+    source=ord_api,
+    local_dir=DATA_DIR / "opera" / "dbzh",
+    timestamp_from_name=timestamp_from_ord_name,
+    remote_query=OrdLocationQuery(
+        location_id="0-20010-0-OPERA",
+        method="comp",
+        notes="Use this as the reliable ORD-backed input for countries without confirmed national feeds.",
+    ),
+)
+
+de_dbzh = InputConfig(
+    id="de_dbzh",
+    label="Germany ORD DBZH scans",
+    source=ord_api,
+    local_dir=DATA_DIR / "de" / "ord_dbzh",
+    timestamp_from_name=timestamp_from_ord_name,
+    remote_query=OrdItemsQuery(
+        bbox=GERMANY_BOUNDS,
+        naming_authority="de.dwd",
+        platform_code_prefixes=("de",),
+    ),
+)
+
+pl_dbzh = InputConfig(
+    id="pl_dbzh",
+    label="Poland ORD DBZH scans",
+    source=ord_api,
+    local_dir=DATA_DIR / "pl" / "ord_dbzh",
+    timestamp_from_name=timestamp_from_ord_name,
+    remote_query=OrdItemsQuery(
+        bbox=POLAND_BOUNDS,
+        naming_authority="pl.imgw",
+        platform_code_prefixes=("pl",),
+    ),
+)
+
+sk_dbzh = InputConfig(
+    id="sk_dbzh",
+    label="Slovakia ORD DBZH scans",
+    source=ord_api,
+    local_dir=DATA_DIR / "sk" / "ord_dbzh",
+    timestamp_from_name=timestamp_from_ord_name,
+    remote_query=OrdItemsQuery(
+        bbox=SLOVAKIA_BOUNDS,
+        naming_authority="sk.shmu",
+        platform_code_prefixes=("sk",),
+        notes="Validate naming_authority against the live ORD response before wiring downloads.",
+    ),
+    status="provisional",
+)
+
+cz_product = ProductConfig(
+    id="cz",
+    label="Czechia radar",
+    inputs=inputs(cz_maxz),
+    output_dir=OUTPUT_DIR / "cz",
+    geo_bounds=CZECHIA_BOUNDS,
+    base_name=timestamped_base("radar_cz"),
+)
+
+de_product = ProductConfig(
+    id="de",
+    label="Germany radar",
+    inputs=inputs(de_dbzh),
+    output_dir=OUTPUT_DIR / "de",
+    geo_bounds=GERMANY_BOUNDS,
+    base_name=timestamped_base("radar_de"),
+)
+
+pl_product = ProductConfig(
+    id="pl",
+    label="Poland radar",
+    inputs=inputs(pl_dbzh),
+    output_dir=OUTPUT_DIR / "pl",
+    geo_bounds=POLAND_BOUNDS,
+    base_name=timestamped_base("radar_pl"),
+)
+
+sk_product = ProductConfig(
+    id="sk",
+    label="Slovakia radar",
+    inputs=inputs(sk_dbzh),
+    output_dir=OUTPUT_DIR / "sk",
+    geo_bounds=SLOVAKIA_BOUNDS,
+    base_name=timestamped_base("radar_sk"),
+)
+
+at_product = ProductConfig(
+    id="at",
+    label="Austria radar",
+    inputs=inputs(opera_dbzh),
+    output_dir=OUTPUT_DIR / "at",
+    geo_bounds=AUSTRIA_BOUNDS,
+    base_name=timestamped_base("radar_at"),
+)
+
+central_europe_product = ProductConfig(
+    id="central_europe",
+    label="Central Europe OPERA composite",
+    inputs=inputs(opera_dbzh),
+    output_dir=OUTPUT_DIR / "central_europe",
+    geo_bounds=CENTRAL_EUROPE_BOUNDS,
+    base_name=timestamped_base("radar_central_europe"),
+)
+
+
+SOURCES: tuple[SourceConfig, ...] = (chmi_current, ord_api)
+INPUTS: tuple[InputConfig, ...] = (cz_maxz, opera_dbzh, de_dbzh, pl_dbzh, sk_dbzh)
+COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
+    cz_product,
+    de_product,
+    pl_product,
+    sk_product,
+    at_product,
+)
+COMPOSITE_PRODUCTS: tuple[ProductConfig, ...] = (
+    central_europe_product,
+)
+PRODUCTS: tuple[ProductConfig, ...] = COUNTRY_PRODUCTS + COMPOSITE_PRODUCTS
+
+
+@dataclass(frozen=True)
+class RadarServerConfig:
+    sources: tuple[SourceConfig, ...] = SOURCES
+    inputs: tuple[InputConfig, ...] = INPUTS
+    products: tuple[ProductConfig, ...] = PRODUCTS
+
+
+CONFIG = RadarServerConfig()
