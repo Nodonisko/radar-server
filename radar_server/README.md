@@ -17,6 +17,48 @@ v2 of the radar HDF5 → PNG processor. Country-agnostic rewrite of `../new_vers
 decode → reproject (lossless Web Mercator) → [downsample] → colorize → encode (PNG + JSON)
 ```
 
+## Setup
+
+Python 3.9+. From the repo root:
+
+```bash
+pip install -r requirements.txt        # h5py, numpy, Pillow, pyproj
+```
+
+Also needs the external `oxipng` binary for PNG optimization (e.g. `brew install oxipng`);
+pass `optimize=False` to skip it.
+
+## Running
+
+A library, no CLI yet. Render one file:
+
+```python
+from pathlib import Path
+from radar_server.pipeline import render_radar_png
+from radar_server.palettes import STANDARD_DBZH
+
+render_radar_png(Path("in.h5"), Path("out/"), STANDARD_DBZH, base="radar_20260605_0000")
+# -> out/radar_20260605_0000_overlay.png, _overlay_small.png, + .json bounds sidecar
+```
+
+`render_composite_png(...)` merges several files into one; `render_batch(...)` renders many
+concurrently. The caller chooses each output `base`.
+
+## Tests
+
+```bash
+pip install pytest
+python -m pytest radar_server/tests/        # run from the repo root
+```
+
+Most tests are self-contained (a synthetic ODIM file is generated on the fly). The real-data
+tests use the committed OPERA fixtures and compare renders against PNG snapshots in
+`tests/snapshots/`:
+
+- Refresh snapshots after an intentional render change:
+  `UPDATE_SNAPSHOTS=1 python -m pytest radar_server/tests/test_real_data.py`
+- Regenerate the OPERA fixtures: `radar_server/tests/fixtures/build_fixtures.py` (pulls from MeteoGate).
+
 ## Decisions (and the non-obvious why)
 
 - **Reproject everything to Web Mercator (EPSG:3857), emit a lat/lon bbox.** Web
