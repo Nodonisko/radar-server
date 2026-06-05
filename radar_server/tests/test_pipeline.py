@@ -219,8 +219,9 @@ def test_downsample_fractional_factor() -> None:
 # --- render -------------------------------------------------------------------
 
 def test_render_writes_variants_and_sidecar(tmp_path: Path) -> None:
-    result = render_radar_png(_sample(), tmp_path, STANDARD_DBZH, optimize=False)
+    result = render_radar_png(_sample(), tmp_path, STANDARD_DBZH, base="frame", optimize=False)
 
+    assert result.base == "frame"
     assert set(result.variants) == {"overlay", "overlay_small"}
     for path in result.variants.values():
         assert path.exists()
@@ -238,8 +239,8 @@ def test_render_writes_variants_and_sidecar(tmp_path: Path) -> None:
 
 
 def test_extended_palette_renders(tmp_path: Path) -> None:
-    result = render_radar_png(_sample(), tmp_path, EXTENDED_DBZH, suffix="_extended", optimize=False)
-    assert result.base.endswith("_extended")
+    result = render_radar_png(_sample(), tmp_path, EXTENDED_DBZH, base="frame_extended", optimize=False)
+    assert result.base == "frame_extended"
     assert all(p.exists() for p in result.variants.values())
 
 
@@ -248,9 +249,17 @@ def test_render_batch_skips_failures(tmp_path: Path) -> None:
     # not abort (M3).
     bad = tmp_path / "bad.hdf"
     bad.write_bytes(b"not an hdf file")
-    results = render_batch([_sample(), bad], tmp_path / "out", STANDARD_DBZH, optimize=False)
+    results = render_batch(
+        [(_sample(), "good"), (bad, "bad")], tmp_path / "out", STANDARD_DBZH, optimize=False
+    )
     assert len(results) == 1
+    assert results[0].base == "good"
     assert results[0].variants["overlay"].exists()
+
+
+def test_render_batch_rejects_duplicate_bases(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        render_batch([(_sample(), "dup"), (_sample(), "dup")], tmp_path, STANDARD_DBZH, optimize=False)
 
 
 # --- composite ----------------------------------------------------------------
@@ -280,20 +289,20 @@ def test_composite_requires_shared_timestamp() -> None:
 
 def test_composite_default_bounds_is_union(tmp_path: Path) -> None:
     sample = _sample()
-    full = render_radar_png(sample, tmp_path / "full", STANDARD_DBZH, optimize=False)
-    comp = render_composite_png([sample], tmp_path / "comp", STANDARD_DBZH, "union", optimize=False)
+    full = render_radar_png(sample, tmp_path / "full", STANDARD_DBZH, base="single", optimize=False)
+    comp = render_composite_png([sample], tmp_path / "comp", STANDARD_DBZH, base="union", optimize=False)
     for cb, fb in zip(comp.bounds, full.bounds):
         assert cb == pytest.approx(fb, abs=0.05)
 
 
 def test_composite_crops_to_custom_bounds(tmp_path: Path) -> None:
     sample = _sample()
-    full = render_radar_png(sample, tmp_path / "full", STANDARD_DBZH, optimize=False)
+    full = render_radar_png(sample, tmp_path / "full", STANDARD_DBZH, base="single", optimize=False)
     fw, fs, fe, fn = full.bounds
     dx, dy = (fe - fw) * 0.25, (fn - fs) * 0.25
     bounds = (fw + dx, fs + dy, fe - dx, fn - dy)  # sub-box strictly inside
 
-    comp = render_composite_png([sample], tmp_path / "comp", STANDARD_DBZH, "cz_box", bounds=bounds, optimize=False)
+    comp = render_composite_png([sample], tmp_path / "comp", STANDARD_DBZH, base="cz_box", bounds=bounds, optimize=False)
 
     assert comp.base == "cz_box"
     assert (tmp_path / "comp" / "cz_box_overlay.png").exists()

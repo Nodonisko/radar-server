@@ -100,16 +100,16 @@ def render_radar_png(
     output_dir: Path,
     palette: PaletteSpec,
     *,
+    base: str,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
-    suffix: str = "",
     optimize: bool = True,
 ) -> RenderResult:
     """Render one HDF5 file to lossless Web Mercator overlay PNG(s).
 
-    ``suffix`` is appended to the timestamp base (e.g. ``"_forecast_fct30"``).
+    ``base`` is the output filename stem, chosen by the caller. The renderer is
+    naming-agnostic; the data timestamp is recorded in the sidecar, not the name.
     """
     field = to_web_mercator(load_odim_hdf(hdf_path, quantity=palette.quantity))
-    base = f"radar_{field.timestamp:%Y%m%d_%H%M}{suffix}"
     return _emit(field, output_dir, palette, base, variants, optimize, sources=[hdf_path.name])
 
 
@@ -117,8 +117,8 @@ def render_composite_png(
     hdf_paths: Iterable[Path],
     output_dir: Path,
     palette: PaletteSpec,
-    base: str,
     *,
+    base: str,
     bounds: Optional[Bounds] = None,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
@@ -139,31 +139,41 @@ def render_composite_png(
 
 
 def render_batch(
-    hdf_paths: Iterable[Path],
+    items: Iterable[Tuple[Path, str]],
     output_dir: Path,
     palette: PaletteSpec,
     *,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
 ) -> List[RenderResult]:
-    """Render many files concurrently (one worker per file)."""
-    paths = list(hdf_paths)
-    if not paths:
+    """Render many files concurrently. ``items`` is ``(hdf_path, base)`` pairs.
+
+    The caller supplies each output ``base`` (naming is the controller's job).
+    Bases must be unique within a batch, since concurrent renders to the same
+    name would race on the output and temp files.
+    """
+    items = list(items)
+    if not items:
         return []
 
+    bases = [base for _, base in items]
+    duplicates = sorted({b for b in bases if bases.count(b) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate output bases in batch: {duplicates}")
+
     results: List[RenderResult] = []
-    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(paths))) as pool:
+    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(items))) as pool:
         futures = {
-            pool.submit(render_radar_png, p, output_dir, palette, variants=variants, optimize=optimize): p
-            for p in paths
+            pool.submit(render_radar_png, path, output_dir, palette, base=base, variants=variants, optimize=optimize): (path, base)
+            for path, base in items
         }
         for future in as_completed(futures):
-            path = futures[future]
+            path, base = futures[future]
             try:
                 results.append(future.result())
             except Exception:
                 # Skip a bad file rather than aborting the whole batch.
-                LOGGER.exception("Failed to render %s; skipping", path.name)
-    if len(results) < len(paths):
-        LOGGER.warning("Rendered %d/%d files (%d failed)", len(results), len(paths), len(paths) - len(results))
+                LOGGER.exception("Failed to render %s (base=%s); skipping", path.name, base)
+    if len(results) < len(items):
+        LOGGER.warning("Rendered %d/%d files (%d failed)", len(results), len(items), len(items) - len(results))
     return results

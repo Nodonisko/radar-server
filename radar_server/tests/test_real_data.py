@@ -83,7 +83,7 @@ def test_reproject_from_laea_oversamples() -> None:
 # --- standard path ------------------------------------------------------------
 
 def test_render_standard_snapshot(tmp_path: Path) -> None:
-    result = render_radar_png(WEST, tmp_path, STANDARD_DBZH, optimize=False)
+    result = render_radar_png(WEST, tmp_path, STANDARD_DBZH, base="west", optimize=False)
     assert result.variants["overlay"].exists()
     _assert_snapshot("standard_west_overlay", result.variants["overlay"])
     _assert_snapshot("standard_west_small", result.variants["overlay_small"])
@@ -92,7 +92,7 @@ def test_render_standard_snapshot(tmp_path: Path) -> None:
 # --- composite: union (no bounds) ---------------------------------------------
 
 def test_composite_union_snapshot(tmp_path: Path) -> None:
-    result = render_composite_png([WEST, EAST], tmp_path, STANDARD_DBZH, "union", optimize=False)
+    result = render_composite_png([WEST, EAST], tmp_path, STANDARD_DBZH, base="union", optimize=False)
     wb = lonlat_bounds(to_web_mercator(load_odim_hdf(WEST)))
     eb = lonlat_bounds(to_web_mercator(load_odim_hdf(EAST)))
     assert result.bounds[0] == pytest.approx(min(wb[0], eb[0]), abs=0.05)  # west edge
@@ -104,8 +104,8 @@ def test_composite_union_snapshot(tmp_path: Path) -> None:
 
 def test_composite_bounds_snapshot(tmp_path: Path) -> None:
     bounds = (11.0, 46.5, 13.5, 49.0)  # inside the overlap band, covered by both tiles
-    full = render_composite_png([WEST, EAST], tmp_path / "full", STANDARD_DBZH, "u", optimize=False)
-    result = render_composite_png([WEST, EAST], tmp_path / "crop", STANDARD_DBZH, "cropped", bounds=bounds, optimize=False)
+    full = render_composite_png([WEST, EAST], tmp_path / "full", STANDARD_DBZH, base="u", optimize=False)
+    result = render_composite_png([WEST, EAST], tmp_path / "crop", STANDARD_DBZH, base="cropped", bounds=bounds, optimize=False)
     for got, want in zip(result.bounds, bounds):
         assert got == pytest.approx(want, abs=0.05)
     with Image.open(result.variants["overlay"]) as crop, Image.open(full.variants["overlay"]) as whole:
@@ -116,8 +116,8 @@ def test_composite_bounds_snapshot(tmp_path: Path) -> None:
 # --- composite: overlap merge is order-independent (fmax) ----------------------
 
 def test_composite_order_independent(tmp_path: Path) -> None:
-    ab = render_composite_png([WEST, EAST], tmp_path / "ab", STANDARD_DBZH, "ab", optimize=False)
-    ba = render_composite_png([EAST, WEST], tmp_path / "ba", STANDARD_DBZH, "ba", optimize=False)
+    ab = render_composite_png([WEST, EAST], tmp_path / "ab", STANDARD_DBZH, base="ab", optimize=False)
+    ba = render_composite_png([EAST, WEST], tmp_path / "ba", STANDARD_DBZH, base="ba", optimize=False)
     a = np.asarray(Image.open(ab.variants["overlay"]).convert("RGBA"))
     b = np.asarray(Image.open(ba.variants["overlay"]).convert("RGBA"))
     assert np.array_equal(a, b)
