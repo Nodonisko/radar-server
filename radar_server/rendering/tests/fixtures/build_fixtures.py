@@ -8,7 +8,7 @@ the two overlapping tiles drive the composite/merge tests.
 To regenerate (free, no auth):
 
     curl -s "https://s3.waw3-1.cloudferro.com/openradar-24h/2026/06/05/OPERA/COMP/OPERA@20260605T0000@0@DBZH.h5" -o /tmp/opera.h5
-    python radar_server/tests/fixtures/build_fixtures.py /tmp/opera.h5
+    python radar_server/rendering/tests/fixtures/build_fixtures.py /tmp/opera.h5
 
 Source: EUMETNET Open Radar Data, CC BY 4.0 (https://api.meteogate.eu).
 """

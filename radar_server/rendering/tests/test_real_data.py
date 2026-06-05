@@ -8,7 +8,7 @@ reprojection and the composite/merge paths.
 Snapshot testing: each render is compared pixel-wise against a committed reference
 PNG in ``snapshots/``. To (re)generate references after an intentional change:
 
-    UPDATE_SNAPSHOTS=1 python -m pytest radar_server/tests/test_real_data.py
+    UPDATE_SNAPSHOTS=1 python -m pytest radar_server/rendering/tests/test_real_data.py
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from radar_server.core import WEB_MERCATOR
-from radar_server.decode import load_odim_hdf
-from radar_server.palettes import STANDARD_DBZH
-from radar_server.pipeline import render_composite_png, render_radar_png
-from radar_server.reproject import lonlat_bounds, to_web_mercator
+from radar_server.rendering.core import WEB_MERCATOR
+from radar_server.rendering.decode import load_odim_hdf
+from radar_server.rendering.palettes import STANDARD_DBZH
+from radar_server.rendering.pipeline import render_composite_png, render_radar_png
+from radar_server.rendering.reproject import lonlat_bounds, to_web_mercator
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"

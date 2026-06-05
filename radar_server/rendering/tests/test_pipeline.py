@@ -18,14 +18,14 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from radar_server.colorize import colorize
-from radar_server.composite import composite_to_web_mercator
-from radar_server.core import WEB_MERCATOR, GeoTransform, PaletteSpec, RadarField
-from radar_server.decode import load_odim_hdf
-from radar_server.downsample import downsample_max
-from radar_server.palettes import EXTENDED_DBZH, STANDARD_DBZH
-from radar_server.pipeline import render_batch, render_composite_png, render_radar_png
-from radar_server.reproject import lonlat_bounds, resample_to_grid, to_web_mercator
+from radar_server.rendering.colorize import colorize
+from radar_server.rendering.composite import composite_to_web_mercator
+from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, PaletteSpec, RadarField
+from radar_server.rendering.decode import load_odim_hdf
+from radar_server.rendering.downsample import downsample_max
+from radar_server.rendering.palettes import EXTENDED_DBZH, STANDARD_DBZH
+from radar_server.rendering.pipeline import render_batch, render_composite_png, render_radar_png
+from radar_server.rendering.reproject import lonlat_bounds, resample_to_grid, to_web_mercator
 
 # Spherical Mercator (as CHMI ships), so the reproject of the synthetic file is a
 # pixel-exact identity, matching the real composites the project consumes.

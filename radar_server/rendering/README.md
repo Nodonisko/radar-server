@@ -1,7 +1,8 @@
-# radar_server
+# radar_server.rendering
 
-v2 of the radar HDF5 → PNG processor. Country-agnostic rewrite of `../new_version/`
-(which was Czech/CHMI only).
+The rendering pipeline of `radar_server` (v2). Country-agnostic rewrite of
+`../../new_version/` (which was Czech/CHMI only). Other server features live in
+sibling packages under `radar_server/`.
 
 ## Features
 
@@ -34,8 +35,7 @@ A library, no CLI yet. Render one file:
 
 ```python
 from pathlib import Path
-from radar_server.pipeline import render_radar_png
-from radar_server.palettes import STANDARD_DBZH
+from radar_server.rendering import render_radar_png, STANDARD_DBZH
 
 render_radar_png(Path("in.h5"), Path("out/"), STANDARD_DBZH, base="radar_20260605_0000")
 # -> out/radar_20260605_0000_overlay.png, _overlay_small.png, + .json bounds sidecar
@@ -48,7 +48,7 @@ concurrently. The caller chooses each output `base`.
 
 ```bash
 pip install pytest
-python -m pytest radar_server/tests/        # run from the repo root
+python -m pytest radar_server/rendering/tests/        # run from the repo root
 ```
 
 Most tests are self-contained (a synthetic ODIM file is generated on the fly). The real-data
@@ -56,8 +56,8 @@ tests use the committed OPERA fixtures and compare renders against PNG snapshots
 `tests/snapshots/`:
 
 - Refresh snapshots after an intentional render change:
-  `UPDATE_SNAPSHOTS=1 python -m pytest radar_server/tests/test_real_data.py`
-- Regenerate the OPERA fixtures: `radar_server/tests/fixtures/build_fixtures.py` (pulls from MeteoGate).
+  `UPDATE_SNAPSHOTS=1 python -m pytest radar_server/rendering/tests/test_real_data.py`
+- Regenerate the OPERA fixtures: `radar_server/rendering/tests/fixtures/build_fixtures.py` (pulls from MeteoGate).
 
 ## Decisions (and the non-obvious why)
 
