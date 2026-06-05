@@ -4,3 +4,4 @@ matplotlib>=3.7.0
 Pillow>=9.5.0
 Flask>=2.3.0
 requests>=2.31.0
+pyproj>=3.5.0

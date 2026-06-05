@@ -1,0 +1,4 @@
+[submodule "docs/openradardata-documentation"]
+	path = docs/openradardata-documentation
+	url = https://github.com/EUMETNET/openradardata-documentation.git
+	shallow = true
