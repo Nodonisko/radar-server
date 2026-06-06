@@ -1,7 +1,8 @@
-"""Runtime scheduler that connects fetching, registry updates, and rendering."""
+"""Runtime scheduler that connects fetching, input indexing, and rendering."""
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -9,10 +10,12 @@ from typing import Callable, Iterable
 
 from .config import CONFIG, InputConfig, RadarServerConfig, SourceConfig
 from .fetching import InputSyncResult, sync_inputs
+from .input_index import LocalInputIndex
 from .pruning import prune_all
-from .registry import InputRegistry
 from .render_jobs import render_ready_jobs
 from .rendering.pipeline import RenderResult
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -49,15 +52,17 @@ class RadarScheduler:
         self,
         config: RadarServerConfig = CONFIG,
         *,
-        registry: InputRegistry | None = None,
+        input_index: LocalInputIndex | None = None,
         sync_func: SyncInputs = sync_inputs,
         render_func: RenderReadyJobs = render_ready_jobs,
         sleep_func: Sleep = time.sleep,
         now: datetime | None = None,
+        index_inputs: Iterable[InputConfig] | None = None,
     ) -> None:
         reference = now or datetime.utcnow()
         self.config = config
-        self.registry = registry or InputRegistry.from_local_inputs(config.inputs, now=reference)
+        self.index_inputs = tuple(index_inputs or config.inputs)
+        self.input_index = input_index or LocalInputIndex.from_filesystem(self.index_inputs, now=reference)
         self.sync_func = sync_func
         self.render_func = render_func
         self.sleep_func = sleep_func
@@ -81,13 +86,12 @@ class RadarScheduler:
         reference = now or datetime.utcnow()
         limit = limit_per_input if limit_per_input is not None else _default_limit_per_input(input_configs)
         synced = tuple(self.sync_func(input_configs, now=reference, limit_per_input=limit))
-        self.registry.add_sync_results(synced)
-        self.registry.prune(self.config.inputs, now=reference)
-        rendered = tuple(self.render_func(self.registry, self.config.products))
         prune_all(inputs=self.config.inputs, products=self.config.products, now=reference)
+        self.input_index = LocalInputIndex.from_filesystem(self.index_inputs, now=reference)
+        rendered = tuple(self.render_func(self.input_index, self.config.products))
         return SchedulerCycleResult(synced=synced, rendered=rendered)
 
-    def step(self, now: datetime | None = None) -> SchedulerCycleResult | None:
+    def step(self, now: datetime | None = None, *, limit_per_input: int | None = None) -> SchedulerCycleResult | None:
         reference = now or datetime.utcnow()
         due_source_ids = self._due_source_ids(reference)
         if not due_source_ids:
@@ -98,7 +102,7 @@ class RadarScheduler:
             for input_config in self.config.inputs
             if input_config.source.id in due_source_ids and input_config.enabled
         )
-        result = self.run_once(due_inputs, now=reference)
+        result = self.run_once(due_inputs, now=reference, limit_per_input=limit_per_input)
         self._update_due_sources(due_source_ids, result, reference)
         return result
 
@@ -115,19 +119,33 @@ class RadarScheduler:
                 state.quick_mode = True
                 state.quick_attempts = 0
                 state.quick_last_attempt = None
+                LOGGER.info(
+                    "%s: entering quick polling at expected boundary %s",
+                    state.source.id,
+                    state.next_expected_publish.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                LOGGER.info("%s: quick polling attempt 1/%d", state.source.id, policy.quick_check_limit)
                 due.append(source_id)
                 continue
 
             if state.quick_mode:
                 if state.quick_last_attempt is None:
+                    LOGGER.info("%s: quick polling attempt 1/%d", state.source.id, policy.quick_check_limit)
                     due.append(source_id)
                     continue
                 elapsed = (now - state.quick_last_attempt).total_seconds()
                 if elapsed >= policy.quick_check_interval_seconds:
+                    LOGGER.info(
+                        "%s: quick polling attempt %d/%d",
+                        state.source.id,
+                        state.quick_attempts + 1,
+                        policy.quick_check_limit,
+                    )
                     due.append(source_id)
                 continue
 
             if now >= state.next_baseline_poll:
+                LOGGER.info("%s: baseline poll due", state.source.id)
                 due.append(source_id)
         return tuple(due)
 
@@ -146,7 +164,19 @@ class RadarScheduler:
             if state.quick_mode:
                 state.quick_attempts += 1
                 state.quick_last_attempt = now
-                if has_new or state.quick_attempts >= policy.quick_check_limit:
+                if has_new:
+                    LOGGER.info("%s: new file found, leaving quick polling", state.source.id)
+                    state.quick_mode = False
+                    state.quick_attempts = 0
+                    state.quick_last_attempt = None
+                    state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
+                    state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
+                elif state.quick_attempts >= policy.quick_check_limit:
+                    LOGGER.warning(
+                        "%s: quick polling exhausted after %d attempts",
+                        state.source.id,
+                        state.quick_attempts,
+                    )
                     state.quick_mode = False
                     state.quick_attempts = 0
                     state.quick_last_attempt = None
@@ -156,6 +186,7 @@ class RadarScheduler:
 
             state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
             if has_new:
+                LOGGER.info("%s: new file found during baseline poll", state.source.id)
                 state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
 
 

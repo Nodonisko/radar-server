@@ -9,7 +9,7 @@ from typing import Iterable
 
 from .config import GeoBounds, InputConfig, ProductConfig, RenderContext
 from .fetching import LocalInputFile
-from .registry import InputRegistry
+from .input_index import LocalInputIndex
 from .rendering.pipeline import Bounds, RenderResult
 
 
@@ -31,7 +31,7 @@ class RenderJob:
 
 
 def resolve_render_jobs(
-    registry: InputRegistry,
+    input_index: LocalInputIndex,
     products: Iterable[ProductConfig],
     *,
     include_existing: bool = False,
@@ -40,21 +40,21 @@ def resolve_render_jobs(
 
     jobs: list[RenderJob] = []
     for product in products:
-        for timestamp in sorted(registry.ready_timestamps(product)):
-            job = _job_for_product_timestamp(registry, product, timestamp)
+        for timestamp in sorted(input_index.ready_timestamps(product)):
+            job = _job_for_product_timestamp(input_index, product, timestamp)
             if include_existing or not outputs_exist(job):
                 jobs.append(job)
     return jobs
 
 
 def render_ready_jobs(
-    registry: InputRegistry,
+    input_index: LocalInputIndex,
     products: Iterable[ProductConfig],
     *,
     include_existing: bool = False,
 ) -> list[RenderResult]:
     results: list[RenderResult] = []
-    for job in resolve_render_jobs(registry, products, include_existing=include_existing):
+    for job in resolve_render_jobs(input_index, products, include_existing=include_existing):
         result = render_job(job, skip_existing=not include_existing)
         if result is not None:
             results.append(result)
@@ -116,12 +116,12 @@ def bounds_tuple(bounds: GeoBounds | None) -> Bounds | None:
 
 
 def _job_for_product_timestamp(
-    registry: InputRegistry,
+    input_index: LocalInputIndex,
     product: ProductConfig,
     timestamp: datetime,
 ) -> RenderJob:
     render_inputs = tuple(
-        RenderInput(input=input_config, files=registry.files_for(input_config, timestamp))
+        RenderInput(input=input_config, files=input_index.files_for(input_config, timestamp))
         for input_config in product.inputs
     )
     return RenderJob(product=product, timestamp=timestamp, inputs=render_inputs)

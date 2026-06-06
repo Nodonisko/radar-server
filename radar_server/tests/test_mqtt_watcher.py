@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime
 
-from radar_server.config import opera_dbzh
+from radar_server.config import RetentionPolicy, opera_dbzh
 from radar_server.fetching import LocalInputFile
+from radar_server.input_index import LocalInputIndex
 from radar_server.mqtt_watcher import MqttWatcher, _input_matches_topic, _subscription_topics, parse_ord_topic
-from radar_server.registry import InputRegistry
 
 
 def test_parse_ord_topic() -> None:
@@ -35,17 +36,18 @@ def test_subscription_topics_prefers_explicit_configured_topic() -> None:
 
 def test_handle_message_downloads_matching_ord_payload(monkeypatch, tmp_path) -> None:
     timestamp = datetime(2026, 6, 5, 21, 35)
+    input_config = replace(opera_dbzh, local_dir=tmp_path, retention=RetentionPolicy(keep_for_seconds=None))
     destination = tmp_path / "OPERA@20260605T2135@0@DBZH.h5"
-    registry = InputRegistry()
-    watcher = MqttWatcher(inputs=(opera_dbzh,), products=(), registry=registry)
+    input_index = LocalInputIndex(files={})
+    watcher = MqttWatcher(inputs=(input_config,), products=(), input_index=input_index)
     rendered_calls = []
 
     def fake_download(remote):
         destination.write_bytes(b"hdf")
-        return LocalInputFile(opera_dbzh, timestamp, destination, remote, downloaded=True)
+        return LocalInputFile(input_config, timestamp, destination, remote, downloaded=True)
 
-    def fake_render(registry, products):
-        rendered_calls.append((registry, tuple(products)))
+    def fake_render(input_index, products):
+        rendered_calls.append((input_index, tuple(products)))
         return []
 
     monkeypatch.setattr("radar_server.mqtt_watcher.download_remote_file", fake_download)
@@ -66,7 +68,7 @@ def test_handle_message_downloads_matching_ord_payload(monkeypatch, tmp_path) ->
         json.dumps(payload).encode("utf-8"),
     )
 
-    assert result.matched_inputs == (opera_dbzh,)
+    assert result.matched_inputs == (input_config,)
     assert len(result.downloaded) == 1
-    assert registry.timestamps_for(opera_dbzh) == {timestamp}
+    assert watcher.input_index.timestamps_for(input_config) == {timestamp}
     assert len(rendered_calls) == 1

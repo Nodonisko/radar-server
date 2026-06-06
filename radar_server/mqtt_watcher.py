@@ -2,7 +2,7 @@
 
 MQTT is preferred over polling when available: a notification payload already
 contains direct ODIM links, so the watcher can download the file and feed it
-into the same registry/render path as polling.
+into the same filesystem-index/render path as polling.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from typing import Iterable
 
 from .config import CONFIG, InputConfig, NotificationPolicy, OrdApiSource, OrdLocationQuery, ProductConfig
 from .fetching import LocalInputFile, download_remote_file, remote_files_from_ord_payload
+from .input_index import LocalInputIndex
 from .pruning import prune_all
-from .registry import InputRegistry
 from .render_jobs import render_ready_jobs
 from .rendering.pipeline import RenderResult
 
@@ -45,12 +45,12 @@ class MqttWatcher:
         *,
         inputs: Iterable[InputConfig] = CONFIG.inputs,
         products: Iterable[ProductConfig] = CONFIG.products,
-        registry: InputRegistry | None = None,
+        input_index: LocalInputIndex | None = None,
         lock: RLock | None = None,
     ) -> None:
         self.inputs = tuple(inputs)
         self.products = tuple(products)
-        self.registry = registry or InputRegistry.from_local_inputs(self.inputs)
+        self.input_index = input_index or LocalInputIndex.from_filesystem(self.inputs)
         self.lock = lock or RLock()
         self.connected = False
         self.last_message_at: datetime | None = None
@@ -67,11 +67,9 @@ class MqttWatcher:
                 for remote in remote_files_from_ord_payload(input_config, payload_json, quantity=input_config.quantity):
                     downloaded.append(download_remote_file(remote))
 
-            if downloaded:
-                self.registry.add(downloaded)
-                self.registry.prune(self.inputs)
-            rendered = tuple(render_ready_jobs(self.registry, self.products))
             prune_all(inputs=self.inputs, products=self.products)
+            self.input_index = LocalInputIndex.from_filesystem(self.inputs)
+            rendered = tuple(render_ready_jobs(self.input_index, self.products))
         return MqttHandleResult(
             topic=topic,
             matched_inputs=matched_inputs,

@@ -48,6 +48,8 @@ def _config(tmp_path: Path) -> tuple[RadarServerConfig, object]:
 
 def _sync_result(input_config, timestamp: datetime, *, downloaded: bool) -> InputSyncResult:
     path = input_config.local_dir / f"T_PABV23_C_OKPR_{timestamp:%Y%m%d%H%M}00.hdf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"hdf")
     remote = RemoteInputFile(
         input=input_config,
         timestamp=timestamp,
@@ -65,7 +67,7 @@ def _sync_result(input_config, timestamp: datetime, *, downloaded: bool) -> Inpu
     return InputSyncResult(input=input_config, files=(local,))
 
 
-def test_run_once_syncs_registry_and_renders(tmp_path: Path) -> None:
+def test_run_once_syncs_filesystem_index_and_renders(tmp_path: Path) -> None:
     config, input_config = _config(tmp_path)
     now = datetime(2026, 6, 5, 21, 5)
     sync_calls = []
@@ -75,9 +77,9 @@ def test_run_once_syncs_registry_and_renders(tmp_path: Path) -> None:
         sync_calls.append((tuple(inputs), now, limit_per_input))
         return [_sync_result(input_config, now, downloaded=True)]
 
-    def fake_render(registry, products):
-        render_calls.append((registry, tuple(products)))
-        assert registry.timestamps_for(input_config) == {now}
+    def fake_render(input_index, products):
+        render_calls.append((input_index, tuple(products)))
+        assert input_index.timestamps_for(input_config) == {now}
         return []
 
     scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=fake_render, now=now)
@@ -99,7 +101,7 @@ def test_step_runs_initial_baseline_poll(tmp_path: Path) -> None:
         sync_count += 1
         return [_sync_result(input_config, now, downloaded=False)]
 
-    scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=lambda registry, products: [], now=now)
+    scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=lambda input_index, products: [], now=now)
 
     assert scheduler.step(now) is not None
     assert sync_count == 1
@@ -118,7 +120,7 @@ def test_step_enters_quick_mode_at_expected_boundary_and_respects_interval(tmp_p
         sync_count += 1
         return [_sync_result(input_config, now, downloaded=False)]
 
-    scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=lambda registry, products: [], now=start)
+    scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=lambda input_index, products: [], now=start)
 
     assert scheduler.step(boundary) is not None
     state = scheduler.source_states[input_config.source.id]
@@ -141,7 +143,7 @@ def test_quick_mode_exits_when_new_file_arrives(tmp_path: Path) -> None:
     def fake_sync(inputs, *, now=None, limit_per_input=None):  # noqa: ARG001
         return [_sync_result(input_config, now, downloaded=downloads.pop(0))]
 
-    scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=lambda registry, products: [], now=start)
+    scheduler = RadarScheduler(config, sync_func=fake_sync, render_func=lambda input_index, products: [], now=start)
     scheduler.step(boundary)
     result = scheduler.step(boundary + timedelta(seconds=3))
 

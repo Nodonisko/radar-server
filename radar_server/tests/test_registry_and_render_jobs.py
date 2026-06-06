@@ -13,7 +13,7 @@ from radar_server.config import (
     timestamped_base,
 )
 from radar_server.fetching import LocalInputFile, RemoteInputFile
-from radar_server.registry import InputRegistry
+from radar_server.input_index import LocalInputIndex
 from radar_server.render_jobs import (
     RenderJob,
     RenderInput,
@@ -58,17 +58,25 @@ def _local_file(input_config, timestamp: datetime, path: Path) -> LocalInputFile
     )
 
 
-def test_registry_groups_files_by_input_and_timestamp(tmp_path: Path) -> None:
+def _index(*files: LocalInputFile) -> LocalInputIndex:
+    by_input = {}
+    for item in files:
+        by_timestamp = by_input.setdefault(item.input.id, {})
+        by_timestamp.setdefault(item.timestamp, ())
+        by_timestamp[item.timestamp] = (*by_timestamp[item.timestamp], item)
+    return LocalInputIndex(files=by_input)
+
+
+def test_input_index_groups_files_by_input_and_timestamp(tmp_path: Path) -> None:
     ts = datetime(2026, 6, 5, 21, 5)
     input_config = _with_local_dir(cz_maxz, tmp_path / "in")
     path = tmp_path / "a.hdf"
     path.write_bytes(b"x")
 
-    registry = InputRegistry()
-    registry.add([_local_file(input_config, ts, path)])
+    input_index = _index(_local_file(input_config, ts, path))
 
-    assert registry.timestamps_for(input_config) == {ts}
-    assert registry.files_for(input_config, ts)[0].path == path
+    assert input_index.timestamps_for(input_config) == {ts}
+    assert input_index.files_for(input_config, ts)[0].path == path
 
 
 def test_startup_scan_uses_input_suffixes_and_two_hour_cutoff(tmp_path: Path) -> None:
@@ -78,10 +86,10 @@ def test_startup_scan_uses_input_suffixes_and_two_hour_cutoff(tmp_path: Path) ->
     recent.write_bytes(b"recent")
     (tmp_path / "T_PABV23_C_OKPR_20260605210500.txt").write_bytes(b"wrong suffix")
 
-    registry = InputRegistry.from_local_inputs([input_config], now=datetime(2026, 6, 5, 21, 5))
+    input_index = LocalInputIndex.from_filesystem([input_config], now=datetime(2026, 6, 5, 21, 5))
 
-    assert registry.timestamps_for(input_config) == {datetime(2026, 6, 5, 19, 5)}
-    assert registry.files_for(input_config, datetime(2026, 6, 5, 19, 5))[0].path == recent
+    assert input_index.timestamps_for(input_config) == {datetime(2026, 6, 5, 19, 5)}
+    assert input_index.files_for(input_config, datetime(2026, 6, 5, 19, 5))[0].path == recent
 
 
 def test_ready_timestamps_requires_all_product_inputs(tmp_path: Path) -> None:
@@ -91,16 +99,13 @@ def test_ready_timestamps_requires_all_product_inputs(tmp_path: Path) -> None:
     ts_missing = datetime(2026, 6, 5, 21, 10)
     product = _product(tmp_path, inputs=(a, b))
 
-    registry = InputRegistry()
-    registry.add(
-        [
-            _local_file(a, ts_ready, tmp_path / "a_ready.hdf"),
-            _local_file(b, ts_ready, tmp_path / "b_ready.hdf"),
-            _local_file(a, ts_missing, tmp_path / "a_missing_b.hdf"),
-        ]
+    input_index = _index(
+        _local_file(a, ts_ready, tmp_path / "a_ready.hdf"),
+        _local_file(b, ts_ready, tmp_path / "b_ready.hdf"),
+        _local_file(a, ts_missing, tmp_path / "a_missing_b.hdf"),
     )
 
-    assert registry.ready_timestamps(product) == {ts_ready}
+    assert input_index.ready_timestamps(product) == {ts_ready}
 
 
 def test_resolve_render_jobs_skips_existing_outputs(tmp_path: Path) -> None:
@@ -110,14 +115,13 @@ def test_resolve_render_jobs_skips_existing_outputs(tmp_path: Path) -> None:
     input_path = tmp_path / "input.hdf"
     input_path.write_bytes(b"x")
 
-    registry = InputRegistry()
-    registry.add([_local_file(input_config, ts, input_path)])
+    input_index = _index(_local_file(input_config, ts, input_path))
     for path in expected_output_paths(product, ts):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"exists")
 
-    assert resolve_render_jobs(registry, [product]) == []
-    assert len(resolve_render_jobs(registry, [product], include_existing=True)) == 1
+    assert resolve_render_jobs(input_index, [product]) == []
+    assert len(resolve_render_jobs(input_index, [product], include_existing=True)) == 1
 
 
 def test_bounds_tuple_converts_geo_bounds() -> None:

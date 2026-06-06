@@ -115,7 +115,12 @@ def sync_input(
 ) -> list[LocalInputFile]:
     """Discover and download missing files for one input."""
 
-    remotes = discover_remote_files(input_config, now=now, limit=limit)
+    reference = now or datetime.now(timezone.utc)
+    remotes = [
+        remote
+        for remote in discover_remote_files(input_config, now=reference, limit=limit)
+        if _within_input_retention(input_config, remote.timestamp, reference)
+    ]
     return [download_remote_file(remote) for remote in remotes]
 
 
@@ -390,6 +395,13 @@ def _input_lookback_minutes(input_config: InputConfig) -> int:
     if keep_for is None:
         return 0
     return max(1, int(keep_for // 60))
+
+
+def _within_input_retention(input_config: InputConfig, timestamp: datetime, now: datetime) -> bool:
+    keep_for = input_config.retention.keep_for_seconds
+    if keep_for is None:
+        return True
+    return timestamp >= _as_utc(now).replace(tzinfo=None) - timedelta(seconds=keep_for)
 
 
 def _datetime_window(now: datetime | None, lookback_minutes: int) -> str:
