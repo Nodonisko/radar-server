@@ -298,7 +298,7 @@ def timestamped_base(prefix: str) -> BaseNameFactory:
 CHMI_SMART_POLLING = SmartPollingPolicy(
     expected_period_seconds=300,
     baseline_interval_seconds=300,
-    quick_check_interval_seconds=3,
+    quick_check_interval_seconds=5,
     quick_check_limit=90,
 )
 
