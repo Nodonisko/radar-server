@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import shutil
 import tempfile
 from datetime import datetime
@@ -236,6 +237,36 @@ def test_render_writes_variants_and_sidecar(tmp_path: Path) -> None:
     assert payload["palette"] == "dbzh"
     assert set(payload["variants"]) == {"overlay", "overlay_small"}
     assert set(payload["bounds"]) == {"west", "south", "east", "north"}
+
+
+def test_render_logs_single_performance_summary(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+
+    render_radar_png(_sample(), tmp_path, STANDARD_DBZH, base="logged_frame", optimize=False)
+
+    pipeline_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "radar_server.rendering.pipeline" and record.levelno == logging.INFO
+    ]
+    encode_info_logs = [
+        record
+        for record in caplog.records
+        if record.name == "radar_server.rendering.encode" and record.levelno >= logging.INFO
+    ]
+
+    assert len(pipeline_logs) == 1
+    assert "Rendered logged_frame in " in pipeline_logs[0]
+    assert "decode=" in pipeline_logs[0]
+    assert "reproject=" in pipeline_logs[0]
+    assert "emit=" in pipeline_logs[0]
+    assert "downsample=" in pipeline_logs[0]
+    assert "colorize=" in pipeline_logs[0]
+    assert "encode=" in pipeline_logs[0]
+    assert "png_save=" in pipeline_logs[0]
+    assert "oxipng=" in pipeline_logs[0]
+    assert "sidecar=" not in pipeline_logs[0]
+    assert encode_info_logs == []
 
 
 def test_extended_palette_renders(tmp_path: Path) -> None:

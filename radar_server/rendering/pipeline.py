@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,7 @@ from .composite import composite_to_web_mercator
 from .core import PaletteSpec, RadarField
 from .decode import load_odim_hdf
 from .downsample import downsample_max
-from .encode import write_png
+from .encode import PngWriteTimings, write_png
 from .reproject import lonlat_bounds, to_web_mercator
 
 LOGGER = logging.getLogger(__name__)
@@ -46,6 +47,53 @@ class RenderResult:
     bounds: Bounds
 
 
+@dataclass
+class _EmitTimings:
+    downsample: float = 0.0
+    colorize: float = 0.0
+    encode: float = 0.0
+    png_save: float = 0.0
+    oxipng: float = 0.0
+    total: float = 0.0
+
+
+def _log_render_performance(
+    *,
+    base: str,
+    source_count: int,
+    result: RenderResult,
+    field: RadarField,
+    total: float,
+    decode: float,
+    transform_label: str,
+    transform: float,
+    emit: _EmitTimings,
+) -> None:
+    LOGGER.info(
+        (
+            "Rendered %s in %.0fms | sources=%d variants=%d size=%dx%d "
+            "decode=%.0fms %s=%.0fms emit=%.0fms "
+            "(downsample=%.0fms colorize=%.0fms encode=%.0fms "
+            "png_save=%.0fms oxipng=%.0fms)"
+        ),
+        base,
+        total * 1000,
+        source_count,
+        len(result.variants),
+        field.transform.width,
+        field.transform.height,
+        decode * 1000,
+        transform_label,
+        transform * 1000,
+        emit.total * 1000,
+        emit.downsample * 1000,
+        emit.colorize * 1000,
+        emit.encode * 1000,
+        emit.png_save * 1000,
+        emit.oxipng * 1000,
+    )
+
+
 def _emit(
     field: RadarField,
     output_dir: Path,
@@ -54,8 +102,10 @@ def _emit(
     variants: Sequence[Tuple[str, float]],
     optimize: bool,
     sources: Sequence[str],
+    timings: _EmitTimings,
 ) -> RenderResult:
     """Shared tail: downsample -> colorize -> encode each variant, write sidecar."""
+    emit_start = time.perf_counter()
     if not variants:
         raise ValueError("variants must not be empty")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -64,10 +114,22 @@ def _emit(
     written: Dict[str, Path] = {}
     manifest: Dict[str, dict] = {}
     for name, factor in variants:
+        step_start = time.perf_counter()
         variant_field = downsample_max(field, factor)
+        timings.downsample += time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
         image = colorize(variant_field, palette)
+        timings.colorize += time.perf_counter() - step_start
+
         path = output_dir / f"{base}_{name}.png"
-        write_png(image, path, optimize=optimize)
+        step_start = time.perf_counter()
+        png_timings = PngWriteTimings()
+        write_png(image, path, optimize=optimize, timings=png_timings)
+        timings.encode += time.perf_counter() - step_start
+        timings.png_save += png_timings.save
+        timings.oxipng += png_timings.oxipng
+
         written[name] = path
         manifest[name] = {
             "file": path.name,
@@ -90,8 +152,8 @@ def _emit(
             indent=2,
         )
     )
+    timings.total = time.perf_counter() - emit_start
 
-    LOGGER.info("Rendered %s -> %s", base, ", ".join(p.name for p in written.values()))
     return RenderResult(base=base, variants=written, sidecar=sidecar, bounds=bounds)
 
 
@@ -109,8 +171,30 @@ def render_radar_png(
     ``base`` is the output filename stem, chosen by the caller. The renderer is
     naming-agnostic; the data timestamp is recorded in the sidecar, not the name.
     """
-    field = to_web_mercator(load_odim_hdf(hdf_path, quantity=palette.quantity))
-    return _emit(field, output_dir, palette, base, variants, optimize, sources=[hdf_path.name])
+    total_start = time.perf_counter()
+
+    step_start = time.perf_counter()
+    source_field = load_odim_hdf(hdf_path, quantity=palette.quantity)
+    decode_time = time.perf_counter() - step_start
+
+    step_start = time.perf_counter()
+    field = to_web_mercator(source_field)
+    reproject_time = time.perf_counter() - step_start
+
+    emit_timings = _EmitTimings()
+    result = _emit(field, output_dir, palette, base, variants, optimize, sources=[hdf_path.name], timings=emit_timings)
+    _log_render_performance(
+        base=base,
+        source_count=1,
+        result=result,
+        field=field,
+        total=time.perf_counter() - total_start,
+        decode=decode_time,
+        transform_label="reproject",
+        transform=reproject_time,
+        emit=emit_timings,
+    )
+    return result
 
 
 def render_composite_png(
@@ -133,9 +217,30 @@ def render_composite_png(
     if not paths:
         raise ValueError("composite needs at least one input file")
 
+    total_start = time.perf_counter()
+
+    step_start = time.perf_counter()
     fields = [load_odim_hdf(p, quantity=palette.quantity) for p in paths]
+    decode_time = time.perf_counter() - step_start
+
+    step_start = time.perf_counter()
     field = composite_to_web_mercator(fields, bounds=bounds)
-    return _emit(field, output_dir, palette, base, variants, optimize, sources=[p.name for p in paths])
+    composite_time = time.perf_counter() - step_start
+
+    emit_timings = _EmitTimings()
+    result = _emit(field, output_dir, palette, base, variants, optimize, sources=[p.name for p in paths], timings=emit_timings)
+    _log_render_performance(
+        base=base,
+        source_count=len(paths),
+        result=result,
+        field=field,
+        total=time.perf_counter() - total_start,
+        decode=decode_time,
+        transform_label="composite",
+        transform=composite_time,
+        emit=emit_timings,
+    )
+    return result
 
 
 def render_batch(

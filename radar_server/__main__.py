@@ -36,7 +36,11 @@ def main() -> int:
     mqtt.add_argument("--no-optimize", action="store_true", help="Skip PNG optimization")
 
     args = parser.parse_args()
-    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     config = _with_optimize(CONFIG, optimize=not args.no_optimize)
 
     if args.command == "run-once":

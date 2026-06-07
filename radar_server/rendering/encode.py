@@ -10,6 +10,8 @@ import logging
 import os
 import shutil
 import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
@@ -19,6 +21,12 @@ from .colorize import IndexedImage
 LOGGER = logging.getLogger(__name__)
 
 _OXIPNG_CHECKED = False
+
+
+@dataclass
+class PngWriteTimings:
+    save: float = 0.0
+    oxipng: float = 0.0
 
 
 def _ensure_oxipng() -> None:
@@ -51,7 +59,13 @@ def _to_pil(image: IndexedImage) -> Image.Image:
     return img
 
 
-def write_png(image: IndexedImage, path: Path, *, optimize: bool = True) -> Path:
+def write_png(
+    image: IndexedImage,
+    path: Path,
+    *,
+    optimize: bool = True,
+    timings: PngWriteTimings | None = None,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     img = _to_pil(image)
 
@@ -60,14 +74,20 @@ def write_png(image: IndexedImage, path: Path, *, optimize: bool = True) -> Path
     # fails (e.g. oxipng errors) rather than leaving an orphan.
     tmp = path.with_suffix(".tmp.png")
     try:
+        step_start = time.perf_counter()
         img.save(tmp, format="PNG", transparency=image.transparent_index, optimize=False)
+        if timings is not None:
+            timings.save += time.perf_counter() - step_start
         if optimize:
+            step_start = time.perf_counter()
             _ensure_oxipng()
             _run_oxipng(tmp)
+            if timings is not None:
+                timings.oxipng += time.perf_counter() - step_start
         os.replace(tmp, path)
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
 
-    LOGGER.info("Wrote %s (%dx%d)", path.name, img.width, img.height)
+    LOGGER.debug("Wrote %s (%dx%d)", path.name, img.width, img.height)
     return path
