@@ -1,0 +1,62 @@
+[
+  {
+    "id": "cz",
+    "label": "Czechia radar",
+    "bounds": {
+      "west": 11.266869,
+      "south": 48.047275,
+      "east": 19.623974,
+      "north": 51.458369
+    }
+  },
+  {
+    "id": "de",
+    "label": "Germany radar",
+    "bounds": {
+      "west": 5.5,
+      "south": 47.2,
+      "east": 15.2,
+      "north": 55.2
+    }
+  },
+  {
+    "id": "pl",
+    "label": "Poland radar",
+    "bounds": {
+      "west": 14.1,
+      "south": 49.0,
+      "east": 24.2,
+      "north": 54.9
+    }
+  },
+  {
+    "id": "sk",
+    "label": "Slovakia radar",
+    "bounds": {
+      "west": 16.8,
+      "south": 47.7,
+      "east": 22.6,
+      "north": 49.7
+    }
+  },
+  {
+    "id": "at",
+    "label": "Austria radar",
+    "bounds": {
+      "west": 9.4,
+      "south": 46.3,
+      "east": 17.2,
+      "north": 49.1
+    }
+  },
+  {
+    "id": "central_europe",
+    "label": "Central Europe OPERA composite",
+    "bounds": {
+      "west": 5.5,
+      "south": 46.0,
+      "east": 24.2,
+      "north": 55.2
+    }
+  }
+]

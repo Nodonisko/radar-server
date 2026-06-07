@@ -274,7 +274,7 @@ class ProductConfig:
     label: str
     inputs: tuple[InputConfig, ...]
     output_dir: Path
-    geo_bounds: GeoBounds | None
+    geo_bounds: GeoBounds
     base_name: BaseNameFactory
     render: RenderProfile = RenderProfile()
     warn_if_pending_after_seconds: int = 3600
@@ -324,7 +324,7 @@ ord_api = OrdApiSource(
 )
 
 
-CZECHIA_BOUNDS = GeoBounds(west=11.8, south=48.45, east=19.1, north=51.15)
+CZECHIA_BOUNDS = GeoBounds(west=11.266869, south=48.047275, east=19.623974, north=51.458369)
 GERMANY_BOUNDS = GeoBounds(west=5.5, south=47.2, east=15.2, north=55.2)
 POLAND_BOUNDS = GeoBounds(west=14.1, south=49.0, east=24.2, north=54.9)
 SLOVAKIA_BOUNDS = GeoBounds(west=16.8, south=47.7, east=22.6, north=49.7)

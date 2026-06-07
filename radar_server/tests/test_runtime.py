@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from radar_server.config import ProductConfig, RadarServerConfig, chmi_current, cz_maxz, timestamped_base
+from radar_server.config import GeoBounds, ProductConfig, RadarServerConfig, chmi_current, cz_maxz, timestamped_base
 from radar_server.fetching import InputSyncResult, LocalInputFile, RemoteInputFile
 from radar_server.runtime import RadarRuntime
 
@@ -16,7 +16,7 @@ def _config(tmp_path: Path) -> tuple[RadarServerConfig, object]:
         label="Test",
         inputs=(input_config,),
         output_dir=tmp_path / "out",
-        geo_bounds=None,
+        geo_bounds=GeoBounds(0, 0, 0, 0),
         base_name=timestamped_base("radar_test"),
     )
     return RadarServerConfig(sources=(chmi_current,), inputs=(input_config,), products=(product,)), input_config

@@ -39,16 +39,13 @@ python3 -m radar_server mqtt --no-optimize
 
 Main config is Python code in `radar_server/config.py`.
 
-Current active inputs:
+To export the product configurations (including ID, label, and geographic bounds) into a static JSON file for client apps, run from the repository root:
 
-- `cz_maxz`: CHMI national MAX-Z HDF5 composite.
-- `opera_dbzh`: EUMETNET OPERA DBZH HDF5 composite.
+```bash
+python3 export_products.py
+```
 
-Current products:
-
-- `cz`: CHMI composite cropped to Czechia bounds.
-- `de`, `pl`, `sk`, `at`: OPERA composite cropped to country bounds.
-- `central_europe`: OPERA composite cropped to Central Europe bounds.
+This generates `products.json` based on the current configuration.
 
 ## Runtime Pipeline
 

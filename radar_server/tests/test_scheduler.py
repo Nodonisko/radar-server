@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from radar_server.config import (
+    GeoBounds,
     RadarServerConfig,
     SmartPollingPolicy,
     ProductConfig,
@@ -35,7 +36,7 @@ def _product(tmp_path: Path, input_config) -> ProductConfig:
         label="Test",
         inputs=(input_config,),
         output_dir=tmp_path / "out",
-        geo_bounds=None,
+        geo_bounds=GeoBounds(0, 0, 0, 0),
         base_name=timestamped_base("radar_test"),
     )
 

@@ -35,7 +35,7 @@ def _product(tmp_path: Path, *, inputs, geo_bounds=None, render=None) -> Product
         label="Test product",
         inputs=tuple(inputs),
         output_dir=tmp_path / "out",
-        geo_bounds=geo_bounds,
+        geo_bounds=geo_bounds or GeoBounds(0, 0, 0, 0),
         base_name=timestamped_base("radar_test"),
         render=render or RenderProfile(),
     )
