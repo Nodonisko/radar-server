@@ -162,6 +162,8 @@ class RenderProfile:
     palette: PaletteSpec = STANDARD_DBZH
     variants: tuple[VariantSpec, ...] = DEFAULT_VARIANTS
     optimize: bool = True
+    forecast_minutes: tuple[int, ...] = ()
+    forecast_method: str = "VET"
 
 
 @dataclass(frozen=True)
@@ -361,6 +363,7 @@ cz_product = ProductConfig(
     output_dir=OUTPUT_DIR / "cz",
     geo_bounds=CZECHIA_BOUNDS,
     base_name=timestamped_base("radar_cz"),
+    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
 )
 
 de_product = ProductConfig(
@@ -370,6 +373,7 @@ de_product = ProductConfig(
     output_dir=OUTPUT_DIR / "de",
     geo_bounds=GERMANY_BOUNDS,
     base_name=timestamped_base("radar_de"),
+    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
 )
 
 pl_product = ProductConfig(
@@ -379,6 +383,7 @@ pl_product = ProductConfig(
     output_dir=OUTPUT_DIR / "pl",
     geo_bounds=POLAND_BOUNDS,
     base_name=timestamped_base("radar_pl"),
+    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
 )
 
 sk_product = ProductConfig(
@@ -388,6 +393,7 @@ sk_product = ProductConfig(
     output_dir=OUTPUT_DIR / "sk",
     geo_bounds=SLOVAKIA_BOUNDS,
     base_name=timestamped_base("radar_sk"),
+    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
 )
 
 at_product = ProductConfig(
@@ -397,6 +403,7 @@ at_product = ProductConfig(
     output_dir=OUTPUT_DIR / "at",
     geo_bounds=AUSTRIA_BOUNDS,
     base_name=timestamped_base("radar_at"),
+    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
 )
 
 central_europe_product = ProductConfig(
@@ -406,6 +413,7 @@ central_europe_product = ProductConfig(
     output_dir=OUTPUT_DIR / "central_europe",
     geo_bounds=CENTRAL_EUROPE_BOUNDS,
     base_name=timestamped_base("radar_central_europe"),
+    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
 )
 
 

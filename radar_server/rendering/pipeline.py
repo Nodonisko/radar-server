@@ -51,7 +51,7 @@ class RenderResult:
 class _EmitTimings:
     downsample: float = 0.0
     colorize: float = 0.0
-    encode: float = 0.0
+    png_write: float = 0.0
     png_save: float = 0.0
     oxipng: float = 0.0
     total: float = 0.0
@@ -73,8 +73,8 @@ def _log_render_performance(
         (
             "Rendered %s in %.0fms | sources=%d variants=%d size=%dx%d "
             "decode=%.0fms %s=%.0fms emit=%.0fms "
-            "(downsample=%.0fms colorize=%.0fms encode=%.0fms "
-            "png_save=%.0fms oxipng=%.0fms)"
+            "(downsample=%.0fms colorize=%.0fms png_write=%.0fms "
+            "(png_save=%.0fms oxipng=%.0fms))"
         ),
         base,
         total * 1000,
@@ -88,7 +88,7 @@ def _log_render_performance(
         emit.total * 1000,
         emit.downsample * 1000,
         emit.colorize * 1000,
-        emit.encode * 1000,
+        emit.png_write * 1000,
         emit.png_save * 1000,
         emit.oxipng * 1000,
     )
@@ -104,7 +104,7 @@ def _emit(
     sources: Sequence[str],
     timings: _EmitTimings,
 ) -> RenderResult:
-    """Shared tail: downsample -> colorize -> encode each variant, write sidecar."""
+    """Shared tail: downsample -> colorize -> write PNG variants and sidecar."""
     emit_start = time.perf_counter()
     if not variants:
         raise ValueError("variants must not be empty")
@@ -126,7 +126,7 @@ def _emit(
         step_start = time.perf_counter()
         png_timings = PngWriteTimings()
         write_png(image, path, optimize=optimize, timings=png_timings)
-        timings.encode += time.perf_counter() - step_start
+        timings.png_write += time.perf_counter() - step_start
         timings.png_save += png_timings.save
         timings.oxipng += png_timings.oxipng
 

@@ -14,12 +14,15 @@ from radar_server.config import (
 )
 from radar_server.fetching import LocalInputFile, RemoteInputFile
 from radar_server.input_index import LocalInputIndex
+import radar_server.render_jobs as render_jobs_module
 from radar_server.render_jobs import (
     RenderJob,
     RenderInput,
     bounds_tuple,
+    expected_forecast_paths,
     expected_output_paths,
     render_job,
+    render_ready_jobs,
     resolve_render_jobs,
 )
 from radar_server.rendering.pipeline import RenderResult
@@ -122,6 +125,98 @@ def test_resolve_render_jobs_skips_existing_outputs(tmp_path: Path) -> None:
 
     assert resolve_render_jobs(input_index, [product]) == []
     assert len(resolve_render_jobs(input_index, [product], include_existing=True)) == 1
+
+
+def test_resolve_render_jobs_does_not_queue_forecast_without_history(tmp_path: Path) -> None:
+    ts = datetime(2026, 6, 5, 21, 5)
+    input_config = _with_local_dir(cz_maxz, tmp_path / "in")
+    product = _product(
+        tmp_path,
+        inputs=(input_config,),
+        render=RenderProfile(forecast_minutes=(10,)),
+    )
+    input_path = tmp_path / "input.hdf"
+    input_path.write_bytes(b"x")
+
+    input_index = _index(_local_file(input_config, ts, input_path))
+    for path in expected_output_paths(product, ts):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"exists")
+
+    assert resolve_render_jobs(input_index, [product]) == []
+
+
+def test_resolve_render_jobs_only_includes_latest_missing_forecast(tmp_path: Path) -> None:
+    timestamps = (
+        datetime(2026, 6, 5, 20, 55),
+        datetime(2026, 6, 5, 21, 0),
+        datetime(2026, 6, 5, 21, 5),
+        datetime(2026, 6, 5, 21, 10),
+    )
+    latest_ts = timestamps[-1]
+    input_config = _with_local_dir(cz_maxz, tmp_path / "in")
+    product = _product(
+        tmp_path,
+        inputs=(input_config,),
+        render=RenderProfile(forecast_minutes=(10,)),
+    )
+    input_files = []
+    for timestamp in timestamps:
+        input_path = tmp_path / f"{timestamp:%H%M}.hdf"
+        input_path.write_bytes(b"x")
+        input_files.append(_local_file(input_config, timestamp, input_path))
+
+    input_index = _index(*input_files)
+    for ts in timestamps:
+        for path in expected_output_paths(product, ts):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"exists")
+
+    jobs = resolve_render_jobs(input_index, [product])
+
+    assert [job.timestamp for job in jobs] == [latest_ts]
+
+    for path in expected_forecast_paths(product, latest_ts):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"exists")
+    assert resolve_render_jobs(input_index, [product]) == []
+
+
+def test_render_ready_jobs_backfills_images_but_forecasts_latest_job_only(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    timestamps = (
+        datetime(2026, 6, 5, 20, 55),
+        datetime(2026, 6, 5, 21, 0),
+        datetime(2026, 6, 5, 21, 5),
+        datetime(2026, 6, 5, 21, 10),
+    )
+    input_config = _with_local_dir(cz_maxz, tmp_path / "in")
+    product = _product(
+        tmp_path,
+        inputs=(input_config,),
+        render=RenderProfile(forecast_minutes=(10,)),
+    )
+    input_files = []
+    for timestamp in timestamps:
+        input_path = tmp_path / f"{timestamp:%H%M}.hdf"
+        input_path.write_bytes(b"x")
+        input_files.append(_local_file(input_config, timestamp, input_path))
+    input_index = _index(*input_files)
+    calls = []
+
+    def fake_render_job(job, *, input_index=None, skip_existing=True, render_forecast=False):  # noqa: ANN001
+        calls.append((job.timestamp, render_forecast))
+        return []
+
+    monkeypatch.setattr(render_jobs_module, "render_job", fake_render_job)
+
+    render_ready_jobs(input_index, [product])
+
+    assert calls == [
+        (timestamps[0], False),
+        (timestamps[1], False),
+        (timestamps[2], False),
+        (timestamps[3], True),
+    ]
 
 
 def test_bounds_tuple_converts_geo_bounds() -> None:

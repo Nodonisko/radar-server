@@ -4,9 +4,27 @@ Multi-country radar input fetching, backfill, rendering, and runtime loop.
 
 ## Setup
 
+### macOS Python
+
+Use Homebrew Python 3.13 on macOS. Do not use the system `/usr/bin/python3`
+for this server: it is Python 3.9 on this machine, while current `pysteps`
+requires newer Python syntax.
+
+Check the interpreter:
+
 ```bash
-python3 -m pip install -r requirements.txt
+/opt/homebrew/bin/python3.13 --version
 ```
+
+Install dependencies for that Python version:
+
+```bash
+/opt/homebrew/bin/python3.13 -m pip install --user --break-system-packages -r requirements.txt
+```
+
+Homebrew Python is an externally managed environment, so `--user
+--break-system-packages` installs packages into the user site-packages without
+writing into Homebrew's managed Python directory.
 
 Optional PNG optimization needs `oxipng`:
 
@@ -23,10 +41,10 @@ METEOGATE_API_KEY=...
 ## Commands
 
 ```bash
-python3 -m radar_server run-once --no-optimize
-python3 -m radar_server run --no-optimize
-python3 -m radar_server poll --no-optimize
-python3 -m radar_server mqtt --no-optimize
+/opt/homebrew/bin/python3.13 -m radar_server run-once --no-optimize
+/opt/homebrew/bin/python3.13 -m radar_server run --no-optimize
+/opt/homebrew/bin/python3.13 -m radar_server poll --no-optimize
+/opt/homebrew/bin/python3.13 -m radar_server mqtt --no-optimize
 ```
 
 - `run-once`: one fetch/backfill/render cycle.
@@ -42,7 +60,7 @@ Main config is Python code in `radar_server/config.py`.
 To export the product configurations (including ID, label, and geographic bounds) into a static JSON file for client apps, run from the repository root:
 
 ```bash
-python3 export_products.py
+/opt/homebrew/bin/python3.13 export_products.py
 ```
 
 This generates `products.json` based on the current configuration.
@@ -117,8 +135,8 @@ The JSON sidecar contains bounds, variants, source files, palette, quantity, and
 ## Tests
 
 ```bash
-python3 -m pytest radar_server/tests/
-python3 -m pytest radar_server/rendering/tests/
+/opt/homebrew/bin/python3.13 -m pytest radar_server/tests/
+/opt/homebrew/bin/python3.13 -m pytest radar_server/rendering/tests/
 ```
 
 ## Decisions

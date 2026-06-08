@@ -262,7 +262,7 @@ def test_render_logs_single_performance_summary(tmp_path: Path, caplog: pytest.L
     assert "emit=" in pipeline_logs[0]
     assert "downsample=" in pipeline_logs[0]
     assert "colorize=" in pipeline_logs[0]
-    assert "encode=" in pipeline_logs[0]
+    assert "png_write=" in pipeline_logs[0]
     assert "png_save=" in pipeline_logs[0]
     assert "oxipng=" in pipeline_logs[0]
     assert "sidecar=" not in pipeline_logs[0]

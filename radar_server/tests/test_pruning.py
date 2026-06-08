@@ -85,3 +85,27 @@ def test_prune_product_outputs_handles_missing_variant(tmp_path: Path) -> None:
     assert result.deleted == (old_sidecar, old_overlay)
     assert not old_sidecar.exists()
     assert not old_overlay.exists()
+
+
+def test_prune_product_outputs_deletes_old_forecast_frame_group(tmp_path: Path) -> None:
+    product = _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200))
+    forecast_dir = tmp_path / "forecast"
+    forecast_dir.mkdir()
+    old_sidecar = forecast_dir / "radar_test_20260605_1805_fct10.json"
+    old_overlay = forecast_dir / "radar_test_20260605_1805_fct10_overlay.png"
+    old_small = forecast_dir / "radar_test_20260605_1805_fct10_overlay_small.png"
+    recent_sidecar = forecast_dir / "radar_test_20260605_1905_fct10.json"
+    recent_overlay = forecast_dir / "radar_test_20260605_1905_fct10_overlay.png"
+    unknown_sidecar = forecast_dir / "other_20260605_1805_fct10.json"
+    for path in (old_sidecar, old_overlay, old_small, recent_sidecar, recent_overlay, unknown_sidecar):
+        path.write_bytes(b"x")
+
+    result = prune_product_outputs([product], now=datetime(2026, 6, 5, 21, 5))
+
+    assert result.deleted == (old_sidecar, old_overlay, old_small)
+    assert not old_sidecar.exists()
+    assert not old_overlay.exists()
+    assert not old_small.exists()
+    assert recent_sidecar.exists()
+    assert recent_overlay.exists()
+    assert unknown_sidecar.exists()

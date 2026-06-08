@@ -2,3 +2,7 @@
 	path = docs/openradardata-documentation
 	url = https://github.com/EUMETNET/openradardata-documentation.git
 	shallow = true
+[submodule "docs/pysteps"]
+	path = docs/pysteps
+	url = https://github.com/pySTEPS/pysteps.git
+	shallow = true

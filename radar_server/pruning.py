@@ -61,6 +61,7 @@ def prune_product_outputs(products: Iterable[ProductConfig], *, now: datetime | 
         if keep_for is None or not product.output_dir.exists():
             continue
         cutoff = reference - timedelta(seconds=keep_for)
+
         for sidecar in sorted(product.output_dir.glob("*.json")):
             timestamp = _timestamp_from_product_sidecar(product, sidecar)
             if timestamp is None or timestamp >= cutoff:
@@ -69,6 +70,18 @@ def prune_product_outputs(products: Iterable[ProductConfig], *, now: datetime | 
                 if path.exists():
                     _unlink(path)
                     deleted.append(path)
+
+        forecast_dir = product.output_dir / "forecast"
+        if forecast_dir.exists():
+            for sidecar in sorted(forecast_dir.glob("*.json")):
+                timestamp = _timestamp_from_forecast_sidecar(product, sidecar)
+                if timestamp is None or timestamp >= cutoff:
+                    continue
+                for path in _output_frame_paths(product, sidecar):
+                    if path.exists():
+                        _unlink(path)
+                        deleted.append(path)
+
     return PruneResult(tuple(deleted))
 
 
@@ -95,6 +108,13 @@ def _timestamp_from_product_sidecar(product: ProductConfig, sidecar: Path) -> da
     return None
 
 
+def _timestamp_from_forecast_sidecar(product: ProductConfig, sidecar: Path) -> datetime | None:
+    base_stem, separator, lead_minutes = sidecar.stem.rpartition("_fct")
+    if not separator or not lead_minutes.isdecimal():
+        return None
+    return _timestamp_from_product_sidecar(product, sidecar.with_name(f"{base_stem}.json"))
+
+
 def _product_prefix(product: ProductConfig) -> str:
     marker = datetime(2000, 1, 2, 3, 4)
     base = product.base_name(RenderContext(product=product, timestamp=marker))
@@ -106,7 +126,8 @@ def _product_prefix(product: ProductConfig) -> str:
 
 def _output_frame_paths(product: ProductConfig, sidecar: Path) -> tuple[Path, ...]:
     base = sidecar.stem
-    variants = tuple(product.output_dir / f"{base}_{name}.png" for name, _ in product.render.variants)
+    parent = sidecar.parent
+    variants = tuple(parent / f"{base}_{name}.png" for name, _ in product.render.variants)
     return (sidecar, *variants)
 
 

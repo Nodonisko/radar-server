@@ -14,8 +14,12 @@ __pycache__/
 .pytest_cache/
 
 # Virtual environment
+.venv/
 venv/
 env/
+
+# Local source scratch copies
+pysteps_src/
 
 # Local secrets
 .env
