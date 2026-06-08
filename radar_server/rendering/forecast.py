@@ -41,6 +41,7 @@ def render_forecast(
 
     minutes = tuple(dict.fromkeys(sorted(forecast_minutes)))
     if not minutes:
+        LOGGER.info("Forecast skipped for %s: no forecast_minutes requested", base)
         return []
     if any(minute <= 0 for minute in minutes):
         raise ValueError(f"forecast minutes must be positive, got {minutes!r}")

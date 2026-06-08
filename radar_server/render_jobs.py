@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from .config import GeoBounds, InputConfig, ProductConfig, RenderContext
 from .fetching import LocalInputFile
 from .input_index import LocalInputIndex
 from .rendering.pipeline import Bounds, RenderResult
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -144,6 +147,7 @@ def expected_forecast_paths(product: ProductConfig, timestamp: datetime) -> tupl
 def _render_forecasts(job: RenderJob, input_index: LocalInputIndex, *, skip_existing: bool) -> list[RenderResult]:
     product = job.product
     if skip_existing and all(path.exists() for path in expected_forecast_paths(product, job.timestamp)):
+        LOGGER.debug("Forecast skipped for %s at %s: outputs already exist", product.id, job.timestamp)
         return []
 
     # Use the previous frame and the current/latest frame for VET motion.
@@ -151,9 +155,11 @@ def _render_forecasts(job: RenderJob, input_index: LocalInputIndex, *, skip_exis
     try:
         current_idx = timestamps.index(job.timestamp)
     except ValueError:
+        LOGGER.info("Forecast skipped for %s at %s: timestamp not found in ready_timestamps", product.id, job.timestamp)
         return []
 
     if current_idx < 1:
+        LOGGER.info("Forecast skipped for %s at %s: no previous frame available for motion tracking", product.id, job.timestamp)
         return []
 
     past_timestamps = timestamps[current_idx - 1 : current_idx + 1]
@@ -170,6 +176,7 @@ def _render_forecasts(job: RenderJob, input_index: LocalInputIndex, *, skip_exis
         past_job = _job_for_product_timestamp(input_index, product, ts)
         paths = [item.path for item in past_job.files]
         if not paths:
+            LOGGER.info("Forecast skipped for %s at %s: missing input files for past timestamp %s", product.id, job.timestamp, ts)
             return []
 
         if len(paths) == 1 and bounds is None:
