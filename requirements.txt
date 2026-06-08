@@ -7,3 +7,4 @@ requests>=2.31.0
 pyproj>=3.5.0
 paho-mqtt>=2.1.0
 pysteps
+opencv-python-headless>=4.8.0

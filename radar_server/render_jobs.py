@@ -150,7 +150,7 @@ def _render_forecasts(job: RenderJob, input_index: LocalInputIndex, *, skip_exis
         LOGGER.debug("Forecast skipped for %s at %s: outputs already exist", product.id, job.timestamp)
         return []
 
-    # Use the previous frame and the current/latest frame for VET motion.
+    # Use the previous frames and the current/latest frame for motion.
     timestamps = sorted(input_index.ready_timestamps(product))
     try:
         current_idx = timestamps.index(job.timestamp)
@@ -158,11 +158,12 @@ def _render_forecasts(job: RenderJob, input_index: LocalInputIndex, *, skip_exis
         LOGGER.info("Forecast skipped for %s at %s: timestamp not found in ready_timestamps", product.id, job.timestamp)
         return []
 
-    if current_idx < 1:
-        LOGGER.info("Forecast skipped for %s at %s: no previous frame available for motion tracking", product.id, job.timestamp)
+    history_frames = getattr(product.render, "forecast_history_frames", 2)
+    if current_idx < history_frames - 1:
+        LOGGER.info("Forecast skipped for %s at %s: not enough history frames (need %d, have %d)", product.id, job.timestamp, history_frames, current_idx + 1)
         return []
 
-    past_timestamps = timestamps[current_idx - 1 : current_idx + 1]
+    past_timestamps = timestamps[current_idx - history_frames + 1 : current_idx + 1]
 
     from .rendering.decode import load_odim_hdf
     from .rendering.reproject import to_web_mercator

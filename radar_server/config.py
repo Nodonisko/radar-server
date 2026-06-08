@@ -163,7 +163,8 @@ class RenderProfile:
     variants: tuple[VariantSpec, ...] = DEFAULT_VARIANTS
     optimize: bool = True
     forecast_minutes: tuple[int, ...] = ()
-    forecast_method: str = "VET"
+    forecast_method: str = "lucaskanade"
+    forecast_history_frames: int = 3
 
 
 @dataclass(frozen=True)
