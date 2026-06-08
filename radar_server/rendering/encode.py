@@ -40,7 +40,7 @@ def _ensure_oxipng() -> None:
 
 def _run_oxipng(path: Path) -> None:
     result = subprocess.run(
-        ("oxipng", "--opt", "max", "--strip", "safe", "--alpha", str(path)),
+        ("oxipng", "--opt", "3", "--strip", "safe", "--alpha", str(path)),
         capture_output=True,
         text=True,
     )
