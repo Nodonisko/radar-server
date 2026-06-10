@@ -1,8 +1,9 @@
 """MQTT event source for ORD radar notifications.
 
-MQTT is preferred over polling when available: a notification payload already
-contains direct ODIM links, so the watcher can download the file and feed it
-into the same filesystem-index/render path as polling.
+The watcher is a thin producer: a notification payload is parsed into concrete
+remote file references and handed to ``on_notification``. Downloading and
+rendering happen elsewhere (the runtime's download and render workers), so the
+paho network thread never blocks on heavy work and keepalives are never missed.
 """
 
 from __future__ import annotations
@@ -11,15 +12,10 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from threading import RLock
-from typing import Iterable
+from typing import Callable, Iterable
 
-from .config import CONFIG, InputConfig, NotificationPolicy, OrdApiSource, OrdLocationQuery, ProductConfig
-from .fetching import LocalInputFile, download_remote_file, remote_files_from_ord_payload
-from .input_index import LocalInputIndex
-from .pruning import prune_all
-from .render_jobs import render_ready_jobs
-from .rendering.pipeline import RenderResult
+from .config import CONFIG, InputConfig, NotificationPolicy, OrdApiSource, OrdLocationQuery
+from .fetching import RemoteInputFile, remote_files_from_ord_payload
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,11 +28,15 @@ class OrdTopic:
 
 
 @dataclass(frozen=True)
-class MqttHandleResult:
+class MqttNotification:
+    """One matched notification: which input it concerns and its remote files."""
+
     topic: str
-    matched_inputs: tuple[InputConfig, ...]
-    downloaded: tuple[LocalInputFile, ...]
-    rendered: tuple[RenderResult, ...]
+    input: InputConfig
+    remotes: tuple[RemoteInputFile, ...]
+
+
+OnNotification = Callable[[MqttNotification], None]
 
 
 class MqttWatcher:
@@ -44,38 +44,33 @@ class MqttWatcher:
         self,
         *,
         inputs: Iterable[InputConfig] = CONFIG.inputs,
-        products: Iterable[ProductConfig] = CONFIG.products,
-        input_index: LocalInputIndex | None = None,
-        lock: RLock | None = None,
+        on_notification: OnNotification | None = None,
     ) -> None:
         self.inputs = tuple(inputs)
-        self.products = tuple(products)
-        self.input_index = input_index or LocalInputIndex.from_filesystem(self.inputs)
-        self.lock = lock or RLock()
+        self.on_notification = on_notification
         self.connected = False
         self.last_message_at: datetime | None = None
         self._client = None
 
-    def handle_message(self, topic: str, payload: bytes | str) -> MqttHandleResult:
-        with self.lock:
-            self.last_message_at = datetime.utcnow()
-            payload_json = _decode_payload(payload)
-            matched_inputs = tuple(input_config for input_config in self.inputs if _input_matches_topic(input_config, topic))
+    def handle_message(self, topic: str, payload: bytes | str) -> tuple[MqttNotification, ...]:
+        """Parse one notification and hand matching remote files to the callback.
 
-            downloaded: list[LocalInputFile] = []
-            for input_config in matched_inputs:
-                for remote in remote_files_from_ord_payload(input_config, payload_json, quantity=input_config.quantity):
-                    downloaded.append(download_remote_file(remote))
+        Runs on the paho network thread: must stay cheap (no downloads, no
+        rendering, no filesystem scans).
+        """
 
-            prune_all(inputs=self.inputs, products=self.products)
-            self.input_index = LocalInputIndex.from_filesystem(self.inputs)
-            rendered = tuple(render_ready_jobs(self.input_index, self.products))
-        return MqttHandleResult(
-            topic=topic,
-            matched_inputs=matched_inputs,
-            downloaded=tuple(downloaded),
-            rendered=rendered,
-        )
+        self.last_message_at = datetime.utcnow()
+        payload_json = _decode_payload(payload)
+        notifications: list[MqttNotification] = []
+        for input_config in self.inputs:
+            if not _input_matches_topic(input_config, topic):
+                continue
+            remotes = tuple(remote_files_from_ord_payload(input_config, payload_json, quantity=input_config.quantity))
+            notification = MqttNotification(topic=topic, input=input_config, remotes=remotes)
+            notifications.append(notification)
+            if self.on_notification is not None:
+                self.on_notification(notification)
+        return tuple(notifications)
 
     def is_stale(self, *, now: datetime | None = None, stale_after_seconds: int = 600) -> bool:
         if not self.connected:
@@ -85,8 +80,11 @@ class MqttWatcher:
         reference = now or datetime.utcnow()
         return reference - self.last_message_at > timedelta(seconds=stale_after_seconds)
 
+    def default_policy(self) -> NotificationPolicy | None:
+        return _default_mqtt_policy(self.inputs)
+
     def start(self, policy: NotificationPolicy | None = None):
-        policy = policy or _default_mqtt_policy(self.inputs)
+        policy = policy or self.default_policy()
         if policy is None:
             raise ValueError("no MQTT notification policy configured")
 
@@ -104,7 +102,7 @@ class MqttWatcher:
         self._client = None
 
     def run_forever(self, policy: NotificationPolicy | None = None) -> None:
-        policy = policy or _default_mqtt_policy(self.inputs)
+        policy = policy or self.default_policy()
         if policy is None:
             raise ValueError("no MQTT notification policy configured")
 
@@ -139,16 +137,15 @@ class MqttWatcher:
 
         def on_message(client, userdata, message):  # noqa: ANN001
             try:
-                result = self.handle_message(message.topic, message.payload)
+                notifications = self.handle_message(message.topic, message.payload)
             except Exception:
                 LOGGER.exception("Failed to handle MQTT message on %s", message.topic)
                 return
             LOGGER.info(
-                "MQTT %s matched %d inputs, downloaded %d files, rendered %d products",
-                result.topic,
-                len(result.matched_inputs),
-                len(result.downloaded),
-                len(result.rendered),
+                "MQTT %s matched %d inputs (%d remote files announced)",
+                message.topic,
+                len(notifications),
+                sum(len(notification.remotes) for notification in notifications),
             )
 
         client.on_connect = on_connect

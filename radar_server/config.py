@@ -162,9 +162,6 @@ class RenderProfile:
     palette: PaletteSpec = STANDARD_DBZH
     variants: tuple[VariantSpec, ...] = DEFAULT_VARIANTS
     optimize: bool = True
-    forecast_minutes: tuple[int, ...] = ()
-    forecast_method: str = "lucaskanade"
-    forecast_history_frames: int = 3
 
 
 @dataclass(frozen=True)
@@ -271,6 +268,8 @@ class ProductConfig:
 
     Products with multiple inputs match files by exact timestamp. European radar
     products are expected to publish on the same standardized five-minute grid.
+
+    ``priority`` orders render jobs: lower numbers render first.
     """
 
     id: str
@@ -280,9 +279,61 @@ class ProductConfig:
     geo_bounds: GeoBounds
     base_name: BaseNameFactory
     render: RenderProfile = RenderProfile()
+    priority: int = 100
     warn_if_pending_after_seconds: int = 3600
     retention: RetentionPolicy = RetentionPolicy()
     enabled: bool = True
+
+
+@dataclass(frozen=True)
+class ForecastProduct:
+    """A derived nowcast product linked to a parent observed product.
+
+    Forecast generation consumes the parent's last ``history_frames`` input
+    frames, extrapolates them ``minutes`` ahead, and stores the computed fields
+    on disk (under ``field_dir``) so forecast frame rendering behaves like an
+    ordinary product render. Geo bounds, palette, and (by default) variants are
+    reused from the parent; ``priority`` should be a high number so forecast
+    work never preempts observed renders.
+    """
+
+    id: str
+    parent: ProductConfig
+    minutes: tuple[int, ...] = (10, 20, 30, 40, 50, 60)
+    method: str = "lucaskanade"
+    history_frames: int = 3
+    priority: int = 1000
+    variants: tuple[VariantSpec, ...] | None = None
+    field_dir: Path | None = None
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if self.field_dir is None:
+            object.__setattr__(self, "field_dir", DATA_DIR / self.parent.id / "forecast_fields")
+
+    @property
+    def palette(self) -> PaletteSpec:
+        return self.parent.render.palette
+
+    @property
+    def geo_bounds(self) -> GeoBounds:
+        return self.parent.geo_bounds
+
+    @property
+    def output_dir(self) -> Path:
+        return self.parent.output_dir / "forecast"
+
+    @property
+    def render_variants(self) -> tuple[VariantSpec, ...]:
+        return self.variants if self.variants is not None else self.parent.render.variants
+
+    @property
+    def optimize(self) -> bool:
+        return self.parent.render.optimize
+
+    @property
+    def retention(self) -> RetentionPolicy:
+        return self.parent.retention
 
 
 def inputs(*items: InputConfig) -> tuple[InputConfig, ...]:
@@ -364,7 +415,7 @@ cz_product = ProductConfig(
     output_dir=OUTPUT_DIR / "cz",
     geo_bounds=CZECHIA_BOUNDS,
     base_name=timestamped_base("radar_cz"),
-    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
+    priority=0,
 )
 
 de_product = ProductConfig(
@@ -374,7 +425,7 @@ de_product = ProductConfig(
     output_dir=OUTPUT_DIR / "de",
     geo_bounds=GERMANY_BOUNDS,
     base_name=timestamped_base("radar_de"),
-    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
+    priority=10,
 )
 
 pl_product = ProductConfig(
@@ -384,7 +435,7 @@ pl_product = ProductConfig(
     output_dir=OUTPUT_DIR / "pl",
     geo_bounds=POLAND_BOUNDS,
     base_name=timestamped_base("radar_pl"),
-    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
+    priority=10,
 )
 
 sk_product = ProductConfig(
@@ -394,7 +445,7 @@ sk_product = ProductConfig(
     output_dir=OUTPUT_DIR / "sk",
     geo_bounds=SLOVAKIA_BOUNDS,
     base_name=timestamped_base("radar_sk"),
-    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
+    priority=10,
 )
 
 at_product = ProductConfig(
@@ -404,7 +455,7 @@ at_product = ProductConfig(
     output_dir=OUTPUT_DIR / "at",
     geo_bounds=AUSTRIA_BOUNDS,
     base_name=timestamped_base("radar_at"),
-    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
+    priority=10,
 )
 
 central_europe_product = ProductConfig(
@@ -414,7 +465,19 @@ central_europe_product = ProductConfig(
     output_dir=OUTPUT_DIR / "central_europe",
     geo_bounds=CENTRAL_EUROPE_BOUNDS,
     base_name=timestamped_base("radar_central_europe"),
-    render=RenderProfile(forecast_minutes=(10, 20, 30, 40, 50, 60)),
+    priority=20,
+)
+
+
+cz_forecast = ForecastProduct(id="cz_forecast", parent=cz_product, priority=1000)
+de_forecast = ForecastProduct(id="de_forecast", parent=de_product, priority=1010)
+pl_forecast = ForecastProduct(id="pl_forecast", parent=pl_product, priority=1010)
+sk_forecast = ForecastProduct(id="sk_forecast", parent=sk_product, priority=1010)
+at_forecast = ForecastProduct(id="at_forecast", parent=at_product, priority=1010)
+central_europe_forecast = ForecastProduct(
+    id="central_europe_forecast",
+    parent=central_europe_product,
+    priority=1020,
 )
 
 
@@ -431,6 +494,14 @@ COMPOSITE_PRODUCTS: tuple[ProductConfig, ...] = (
     central_europe_product,
 )
 PRODUCTS: tuple[ProductConfig, ...] = COUNTRY_PRODUCTS + COMPOSITE_PRODUCTS
+FORECAST_PRODUCTS: tuple[ForecastProduct, ...] = (
+    cz_forecast,
+    de_forecast,
+    pl_forecast,
+    sk_forecast,
+    at_forecast,
+    central_europe_forecast,
+)
 
 
 @dataclass(frozen=True)
@@ -438,6 +509,7 @@ class RadarServerConfig:
     sources: tuple[SourceConfig, ...] = SOURCES
     inputs: tuple[InputConfig, ...] = INPUTS
     products: tuple[ProductConfig, ...] = PRODUCTS
+    forecasts: tuple[ForecastProduct, ...] = FORECAST_PRODUCTS
 
 
 CONFIG = RadarServerConfig()

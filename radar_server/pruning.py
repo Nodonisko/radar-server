@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
-from .config import InputConfig, ProductConfig, RenderContext
+from .config import ForecastProduct, InputConfig, ProductConfig, RenderContext, VariantSpec
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,11 +26,15 @@ def prune_all(
     *,
     inputs: Iterable[InputConfig],
     products: Iterable[ProductConfig],
+    forecasts: Iterable[ForecastProduct] = (),
     now: datetime | None = None,
 ) -> PruneResult:
+    from .forecast_store import prune_forecast_fields
+
     deleted: list[Path] = []
     deleted.extend(prune_input_files(inputs, now=now).deleted)
-    deleted.extend(prune_product_outputs(products, now=now).deleted)
+    deleted.extend(prune_product_outputs(products, forecasts=forecasts, now=now).deleted)
+    deleted.extend(prune_forecast_fields(forecasts, now=now))
     return PruneResult(tuple(deleted))
 
 
@@ -53,9 +57,15 @@ def prune_input_files(inputs: Iterable[InputConfig], *, now: datetime | None = N
     return PruneResult(tuple(deleted))
 
 
-def prune_product_outputs(products: Iterable[ProductConfig], *, now: datetime | None = None) -> PruneResult:
+def prune_product_outputs(
+    products: Iterable[ProductConfig],
+    *,
+    forecasts: Iterable[ForecastProduct] = (),
+    now: datetime | None = None,
+) -> PruneResult:
     reference = now or datetime.utcnow()
     deleted: list[Path] = []
+    forecasts_by_parent = _forecasts_by_parent_id(forecasts)
     for product in products:
         keep_for = product.retention.keep_for_seconds
         if keep_for is None or not product.output_dir.exists():
@@ -66,18 +76,19 @@ def prune_product_outputs(products: Iterable[ProductConfig], *, now: datetime | 
             timestamp = _timestamp_from_product_sidecar(product, sidecar)
             if timestamp is None or timestamp >= cutoff:
                 continue
-            for path in _output_frame_paths(product, sidecar):
+            for path in _output_frame_paths(sidecar, product.render.variants):
                 if path.exists():
                     _unlink(path)
                     deleted.append(path)
 
         forecast_dir = product.output_dir / "forecast"
         if forecast_dir.exists():
+            forecast_variants = _forecast_variants_for_product(product, forecasts_by_parent)
             for sidecar in sorted(forecast_dir.glob("*.json")):
                 timestamp = _timestamp_from_forecast_sidecar(product, sidecar)
                 if timestamp is None or timestamp >= cutoff:
                     continue
-                for path in _output_frame_paths(product, sidecar):
+                for path in _output_frame_paths(sidecar, forecast_variants):
                     if path.exists():
                         _unlink(path)
                         deleted.append(path)
@@ -124,11 +135,35 @@ def _product_prefix(product: ProductConfig) -> str:
     return ""
 
 
-def _output_frame_paths(product: ProductConfig, sidecar: Path) -> tuple[Path, ...]:
+def _forecasts_by_parent_id(forecasts: Iterable[ForecastProduct]) -> dict[str, tuple[ForecastProduct, ...]]:
+    grouped: dict[str, list[ForecastProduct]] = {}
+    for forecast in forecasts:
+        if not forecast.enabled:
+            continue
+        grouped.setdefault(forecast.parent.id, []).append(forecast)
+    return {parent_id: tuple(items) for parent_id, items in grouped.items()}
+
+
+def _forecast_variants_for_product(
+    product: ProductConfig,
+    forecasts_by_parent: dict[str, tuple[ForecastProduct, ...]],
+) -> tuple[VariantSpec, ...]:
+    forecasts = forecasts_by_parent.get(product.id)
+    if not forecasts:
+        return product.render.variants
+    variants: list[VariantSpec] = []
+    for forecast in forecasts:
+        for variant in forecast.render_variants:
+            if variant not in variants:
+                variants.append(variant)
+    return tuple(variants)
+
+
+def _output_frame_paths(sidecar: Path, variants: tuple[VariantSpec, ...]) -> tuple[Path, ...]:
     base = sidecar.stem
     parent = sidecar.parent
-    variants = tuple(parent / f"{base}_{name}.png" for name, _ in product.render.variants)
-    return (sidecar, *variants)
+    variant_paths = tuple(parent / f"{base}_{name}.png" for name, _ in variants)
+    return (sidecar, *variant_paths)
 
 
 def _unlink(path: Path) -> None:

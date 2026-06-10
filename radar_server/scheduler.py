@@ -1,8 +1,20 @@
-"""Runtime scheduler that connects fetching, input indexing, and rendering."""
+"""Polling scheduler: decides when inputs are due and tracks quick-poll state.
+
+Two usage modes:
+
+- ``run_once``/``step``/``run_forever``: the original synchronous cycle
+  (sync -> prune -> reindex -> render), kept for the ``run-once``/``poll`` CLI
+  commands and tests.
+- ``due_inputs`` + ``record_source_result``: decision-only API used by the
+  queue-based runtime, where downloads happen on the download worker. Decision
+  state updates are guarded by a lock because decisions happen on the main
+  loop while results are recorded from the download worker thread.
+"""
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -66,6 +78,7 @@ class RadarScheduler:
         self.sync_func = sync_func
         self.render_func = render_func
         self.sleep_func = sleep_func
+        self._state_lock = threading.Lock()
         self.source_states = {
             source.id: SourceScheduleState(
                 source=source,
@@ -74,6 +87,57 @@ class RadarScheduler:
             )
             for source in config.sources
         }
+
+    # Decision-only API (queue-based runtime) --------------------------------
+
+    def due_inputs(self, now: datetime) -> tuple[InputConfig, ...]:
+        """Inputs that should be polled now; marks the poll attempt."""
+
+        with self._state_lock:
+            due_ids = self._due_source_ids(now)
+        if not due_ids:
+            return ()
+        return tuple(
+            input_config
+            for input_config in self.config.inputs
+            if input_config.source.id in due_ids and input_config.enabled
+        )
+
+    def record_source_result(self, source_id: str, *, has_new: bool, now: datetime) -> None:
+        """Record the outcome of a poll for one source (any thread)."""
+
+        with self._state_lock:
+            state = self.source_states.get(source_id)
+            if state is None:
+                return
+            policy = state.source.polling
+
+            if state.quick_mode:
+                if has_new:
+                    LOGGER.info("%s: new file found, leaving quick polling", state.source.id)
+                    self._exit_quick_mode(state, now)
+                elif state.quick_attempts >= policy.quick_check_limit:
+                    LOGGER.warning(
+                        "%s: quick polling exhausted after %d attempts",
+                        state.source.id,
+                        state.quick_attempts,
+                    )
+                    self._exit_quick_mode(state, now)
+                return
+
+            if has_new:
+                LOGGER.info("%s: new file found during baseline poll", state.source.id)
+                state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
+
+    def _exit_quick_mode(self, state: SourceScheduleState, now: datetime) -> None:
+        policy = state.source.polling
+        state.quick_mode = False
+        state.quick_attempts = 0
+        state.quick_last_attempt = None
+        state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
+        state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
+
+    # Synchronous cycle API (run-once / poll CLI) ----------------------------
 
     def run_once(
         self,
@@ -84,16 +148,22 @@ class RadarScheduler:
     ) -> SchedulerCycleResult:
         input_configs = tuple(inputs or self.config.inputs)
         reference = now or datetime.utcnow()
-        limit = limit_per_input if limit_per_input is not None else _default_limit_per_input(input_configs)
+        limit = limit_per_input if limit_per_input is not None else default_limit_per_input(input_configs)
         synced = tuple(self.sync_func(input_configs, now=reference, limit_per_input=limit))
-        prune_all(inputs=self.config.inputs, products=self.config.products, now=reference)
+        prune_all(
+            inputs=self.config.inputs,
+            products=self.config.products,
+            forecasts=self.config.forecasts,
+            now=reference,
+        )
         self.input_index = LocalInputIndex.from_filesystem(self.index_inputs, now=reference)
         rendered = tuple(self.render_func(self.input_index, self.config.products))
         return SchedulerCycleResult(synced=synced, rendered=rendered)
 
     def step(self, now: datetime | None = None, *, limit_per_input: int | None = None) -> SchedulerCycleResult | None:
         reference = now or datetime.utcnow()
-        due_source_ids = self._due_source_ids(reference)
+        with self._state_lock:
+            due_source_ids = self._due_source_ids(reference)
         if not due_source_ids:
             return None
 
@@ -103,7 +173,9 @@ class RadarScheduler:
             if input_config.source.id in due_source_ids and input_config.enabled
         )
         result = self.run_once(due_inputs, now=reference, limit_per_input=limit_per_input)
-        self._update_due_sources(due_source_ids, result, reference)
+        source_has_new = _source_downloads(result)
+        for source_id in due_source_ids:
+            self.record_source_result(source_id, has_new=source_has_new.get(source_id, False), now=reference)
         return result
 
     def run_forever(self, *, sleep_seconds: float = 1.0) -> None:
@@ -112,13 +184,15 @@ class RadarScheduler:
             self.sleep_func(sleep_seconds)
 
     def _due_source_ids(self, now: datetime) -> tuple[str, ...]:
+        """Decide due sources and mark attempts. Caller must hold the lock."""
+
         due: list[str] = []
         for source_id, state in self.source_states.items():
             policy = state.source.polling
             if not state.quick_mode and now >= state.next_expected_publish:
                 state.quick_mode = True
-                state.quick_attempts = 0
-                state.quick_last_attempt = None
+                state.quick_attempts = 1
+                state.quick_last_attempt = now
                 LOGGER.info(
                     "%s: entering quick polling at expected boundary %s",
                     state.source.id,
@@ -129,68 +203,31 @@ class RadarScheduler:
                 continue
 
             if state.quick_mode:
-                if state.quick_last_attempt is None:
-                    LOGGER.info("%s: quick polling attempt 1/%d", state.source.id, policy.quick_check_limit)
-                    due.append(source_id)
-                    continue
-                elapsed = (now - state.quick_last_attempt).total_seconds()
-                if elapsed >= policy.quick_check_interval_seconds:
+                elapsed = (
+                    (now - state.quick_last_attempt).total_seconds()
+                    if state.quick_last_attempt is not None
+                    else None
+                )
+                if elapsed is None or elapsed >= policy.quick_check_interval_seconds:
+                    state.quick_attempts += 1
+                    state.quick_last_attempt = now
                     LOGGER.info(
                         "%s: quick polling attempt %d/%d",
                         state.source.id,
-                        state.quick_attempts + 1,
+                        state.quick_attempts,
                         policy.quick_check_limit,
                     )
                     due.append(source_id)
                 continue
 
             if now >= state.next_baseline_poll:
+                state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
                 LOGGER.info("%s: baseline poll due", state.source.id)
                 due.append(source_id)
         return tuple(due)
 
-    def _update_due_sources(
-        self,
-        source_ids: Iterable[str],
-        result: SchedulerCycleResult,
-        now: datetime,
-    ) -> None:
-        source_has_new = _source_downloads(result)
-        for source_id in source_ids:
-            state = self.source_states[source_id]
-            policy = state.source.polling
-            has_new = source_has_new.get(source_id, False)
 
-            if state.quick_mode:
-                state.quick_attempts += 1
-                state.quick_last_attempt = now
-                if has_new:
-                    LOGGER.info("%s: new file found, leaving quick polling", state.source.id)
-                    state.quick_mode = False
-                    state.quick_attempts = 0
-                    state.quick_last_attempt = None
-                    state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
-                    state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
-                elif state.quick_attempts >= policy.quick_check_limit:
-                    LOGGER.warning(
-                        "%s: quick polling exhausted after %d attempts",
-                        state.source.id,
-                        state.quick_attempts,
-                    )
-                    state.quick_mode = False
-                    state.quick_attempts = 0
-                    state.quick_last_attempt = None
-                    state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
-                    state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
-                continue
-
-            state.next_baseline_poll = now + timedelta(seconds=policy.baseline_interval_seconds)
-            if has_new:
-                LOGGER.info("%s: new file found during baseline poll", state.source.id)
-                state.next_expected_publish = _next_expected_publish(now, policy.expected_period_seconds)
-
-
-def _default_limit_per_input(inputs: tuple[InputConfig, ...]) -> int | None:
+def default_limit_per_input(inputs: tuple[InputConfig, ...]) -> int | None:
     limits: list[int] = []
     for input_config in inputs:
         keep_for = input_config.retention.keep_for_seconds

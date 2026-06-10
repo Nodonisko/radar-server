@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from radar_server.config import GeoBounds, ProductConfig, RetentionPolicy, cz_maxz, timestamped_base
+from radar_server.config import ForecastProduct, GeoBounds, ProductConfig, RetentionPolicy, cz_maxz, timestamped_base
 from radar_server.pruning import prune_input_files, prune_product_outputs
 
 
@@ -109,3 +109,27 @@ def test_prune_product_outputs_deletes_old_forecast_frame_group(tmp_path: Path) 
     assert recent_sidecar.exists()
     assert recent_overlay.exists()
     assert unknown_sidecar.exists()
+
+
+def test_prune_product_outputs_uses_forecast_variant_overrides(tmp_path: Path) -> None:
+    product = _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200))
+    forecast = ForecastProduct(
+        id="test_forecast",
+        parent=product,
+        variants=(("custom", 1.0),),
+        field_dir=tmp_path / "fields",
+    )
+    forecast_dir = tmp_path / "forecast"
+    forecast_dir.mkdir()
+    old_sidecar = forecast_dir / "radar_test_20260605_1805_fct10.json"
+    old_custom = forecast_dir / "radar_test_20260605_1805_fct10_custom.png"
+    old_parent_overlay = forecast_dir / "radar_test_20260605_1805_fct10_overlay.png"
+    for path in (old_sidecar, old_custom, old_parent_overlay):
+        path.write_bytes(b"x")
+
+    result = prune_product_outputs([product], forecasts=[forecast], now=datetime(2026, 6, 5, 21, 5))
+
+    assert result.deleted == (old_sidecar, old_custom)
+    assert not old_sidecar.exists()
+    assert not old_custom.exists()
+    assert old_parent_overlay.exists()

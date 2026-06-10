@@ -5,8 +5,6 @@ from dataclasses import replace
 from datetime import datetime
 
 from radar_server.config import RetentionPolicy, opera_dbzh
-from radar_server.fetching import LocalInputFile
-from radar_server.input_index import LocalInputIndex
 from radar_server.mqtt_watcher import MqttWatcher, _input_matches_topic, _subscription_topics, parse_ord_topic
 
 
@@ -34,25 +32,11 @@ def test_subscription_topics_prefers_explicit_configured_topic() -> None:
     assert topics == ("ORD/eu.eumetnet/0-20010-0-OPERA/DBZH",)
 
 
-def test_handle_message_downloads_matching_ord_payload(monkeypatch, tmp_path) -> None:
+def test_handle_message_emits_notification_without_downloading(tmp_path) -> None:
     timestamp = datetime(2026, 6, 5, 21, 35)
-    input_config = replace(opera_dbzh, local_dir=tmp_path, retention=RetentionPolicy(keep_for_seconds=None))
-    destination = tmp_path / "OPERA@20260605T2135@0@DBZH.h5"
-    input_index = LocalInputIndex(files={})
-    watcher = MqttWatcher(inputs=(input_config,), products=(), input_index=input_index)
-    rendered_calls = []
-
-    def fake_download(remote):
-        destination.write_bytes(b"hdf")
-        return LocalInputFile(input_config, timestamp, destination, remote, downloaded=True)
-
-    def fake_render(input_index, products):
-        rendered_calls.append((input_index, tuple(products)))
-        return []
-
-    monkeypatch.setattr("radar_server.mqtt_watcher.download_remote_file", fake_download)
-    monkeypatch.setattr("radar_server.mqtt_watcher.render_ready_jobs", fake_render)
-    monkeypatch.setattr("radar_server.mqtt_watcher.prune_all", lambda **kwargs: None)
+    input_config = replace(opera_dbzh, local_dir=tmp_path / "in", retention=RetentionPolicy(keep_for_seconds=None))
+    captured = []
+    watcher = MqttWatcher(inputs=(input_config,), on_notification=captured.append)
     payload = {
         "links": [
             {
@@ -63,12 +47,31 @@ def test_handle_message_downloads_matching_ord_payload(monkeypatch, tmp_path) ->
         ]
     }
 
-    result = watcher.handle_message(
+    notifications = watcher.handle_message(
         "ORD/eu.eumetnet/0-20010-0-OPERA/DBZH",
         json.dumps(payload).encode("utf-8"),
     )
 
-    assert result.matched_inputs == (input_config,)
-    assert len(result.downloaded) == 1
-    assert watcher.input_index.timestamps_for(input_config) == {timestamp}
-    assert len(rendered_calls) == 1
+    assert len(notifications) == 1
+    notification = notifications[0]
+    assert notification.input is input_config
+    assert [remote.filename for remote in notification.remotes] == ["OPERA@20260605T2135@0@DBZH.h5"]
+    assert notification.remotes[0].timestamp == timestamp
+    assert captured == [notification]
+    assert watcher.last_message_at is not None
+    # The network-thread callback must not touch the filesystem.
+    assert not input_config.local_dir.exists()
+
+
+def test_handle_message_ignores_non_matching_topic(tmp_path) -> None:
+    input_config = replace(opera_dbzh, local_dir=tmp_path / "in")
+    captured = []
+    watcher = MqttWatcher(inputs=(input_config,), on_notification=captured.append)
+
+    notifications = watcher.handle_message(
+        "ORD/eu.eumetnet/0-20000-0-OTHER/DBZH",
+        json.dumps({"links": []}).encode("utf-8"),
+    )
+
+    assert notifications == ()
+    assert captured == []
