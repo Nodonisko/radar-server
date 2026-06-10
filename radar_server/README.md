@@ -47,10 +47,10 @@ METEOGATE_API_KEY=...
 /opt/homebrew/bin/python3.13 -m radar_server mqtt --no-optimize
 ```
 
-- `run-once`: one fetch/backfill/render cycle.
-- `run`: MQTT primary + polling/backfill fallback.
-- `poll`: polling-only runtime.
-- `mqtt`: MQTT-only runtime.
+- `run-once`: one fetch/backfill/render cycle (`--no-forecast` to skip forecasts).
+- `run`: queue-based runtime, MQTT primary + polling/backfill fallback.
+- `poll`: legacy synchronous polling-only scheduler.
+- `mqtt`: MQTT watcher only, downloads without rendering (debug tool).
 - omit `--no-optimize` to use `oxipng`.
 
 ## Config
@@ -71,19 +71,47 @@ This generates `products.json` based on the current configuration.
 config
   -> fetching.py
   -> input_index.py
+  -> queueing.py / workers.py
   -> render_jobs.py
   -> rendering/
+  -> forecast_generation.py / forecast_store.py
   -> pruning.py
 ```
 
 Runtime mode:
 
 ```text
-MQTT notification -> download file -> input index -> render ready products -> prune
-polling backfill  -> download files -> input index -> render ready products -> prune
+MQTT / polling (main thread, networking only)
+  -> ingest queue -> DownloadWorker (1 thread): download, refresh index,
+     enqueue render tasks, record wanted forecasts
+  -> render priority queue -> RenderWorker (1 thread, one render at a time)
+  -> ForecastGenPool (2 threads, dispatched only while render lane is idle):
+     pysteps motion + extrapolation -> fields to disk -> forecast render tasks
 ```
 
 `run` starts MQTT and then immediately runs startup backfill.
+
+## Concurrency
+
+- All heavy work runs on worker threads; the main thread only orchestrates.
+- Numeric priority, lower renders first: `cz=0`, countries `10`,
+  `central_europe=20`, forecasts `1000+`. Observed frames always beat
+  forecast frames.
+- Forecast work coalesces to the latest issue time; stale generations are
+  discarded.
+- On startup the runtime reconciles pending work from the filesystem; on
+  shutdown queued work is abandoned and rebuilt on next start.
+
+## Forecasts
+
+- `ForecastProduct` links to a parent `ProductConfig` and reuses its bounds,
+  palette, and variants.
+- Default: Lucas-Kanade motion from 3 history frames, lead times
+  10–60 min in 10 min steps.
+- Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
+  (atomic clear-and-replace, latest issue only); rendering reads them like
+  ordinary inputs, so it is idempotent and restart-durable.
+- Frames render to `<parent output_dir>/forecast/<base>_fctNN_overlay.png`.
 
 ## Fetching
 
@@ -113,6 +141,7 @@ Retention applies to:
 
 - input files in `radar_server/data/`
 - output files in `radar_server/output/`
+- forecast fields in `data/<parent>/forecast_fields/`
 - local input index scan window
 - polling lookback window
 
