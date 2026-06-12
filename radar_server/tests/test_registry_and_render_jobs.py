@@ -143,7 +143,7 @@ def test_render_ready_jobs_renders_every_missing_timestamp(tmp_path: Path, monke
     input_index = _index(*input_files)
     calls = []
 
-    def fake_render_job(job, *, skip_existing=True):  # noqa: ANN001
+    def fake_render_job(job, *, skip_existing=True, on_output_ready=None):  # noqa: ANN001
         calls.append((job.timestamp, skip_existing))
         return None
 
@@ -166,7 +166,17 @@ def test_render_job_uses_composite_renderer_when_bounds_are_set(tmp_path: Path) 
     def render_single(*args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("single renderer should not be used when bounds are set")
 
-    def render_composite(paths, output_dir, palette, *, base, bounds=None, variants=(), optimize=True):  # noqa: ANN001
+    def render_composite(  # noqa: ANN001
+        paths,
+        output_dir,
+        palette,
+        *,
+        base,
+        bounds=None,
+        variants=(),
+        optimize=True,
+        on_output_ready=None,
+    ):
         calls.append(
             {
                 "paths": tuple(paths),

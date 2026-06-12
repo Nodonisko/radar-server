@@ -88,9 +88,17 @@ def test_prune_product_outputs_handles_missing_variant(tmp_path: Path) -> None:
 
 
 def test_prune_product_outputs_deletes_old_forecast_frame_group(tmp_path: Path) -> None:
-    product = _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200))
-    forecast_dir = tmp_path / "forecast"
-    forecast_dir.mkdir()
+    product = replace(
+        _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200)),
+        output_dir=tmp_path / "out" / "test",
+    )
+    forecast = ForecastProduct(
+        id="test_forecast",
+        parent=product,
+        field_dir=tmp_path / "fields",
+    )
+    forecast_dir = forecast.output_dir
+    forecast_dir.mkdir(parents=True)
     old_sidecar = forecast_dir / "radar_test_20260605_1805_fct10.json"
     old_overlay = forecast_dir / "radar_test_20260605_1805_fct10_overlay.png"
     old_small = forecast_dir / "radar_test_20260605_1805_fct10_overlay_small.png"
@@ -100,7 +108,7 @@ def test_prune_product_outputs_deletes_old_forecast_frame_group(tmp_path: Path) 
     for path in (old_sidecar, old_overlay, old_small, recent_sidecar, recent_overlay, unknown_sidecar):
         path.write_bytes(b"x")
 
-    result = prune_product_outputs([product], now=datetime(2026, 6, 5, 21, 5))
+    result = prune_product_outputs([product], forecasts=[forecast], now=datetime(2026, 6, 5, 21, 5))
 
     assert result.deleted == (old_sidecar, old_overlay, old_small)
     assert not old_sidecar.exists()
@@ -112,15 +120,18 @@ def test_prune_product_outputs_deletes_old_forecast_frame_group(tmp_path: Path) 
 
 
 def test_prune_product_outputs_uses_forecast_variant_overrides(tmp_path: Path) -> None:
-    product = _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200))
+    product = replace(
+        _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200)),
+        output_dir=tmp_path / "out" / "test",
+    )
     forecast = ForecastProduct(
         id="test_forecast",
         parent=product,
         variants=(("custom", 1.0),),
         field_dir=tmp_path / "fields",
     )
-    forecast_dir = tmp_path / "forecast"
-    forecast_dir.mkdir()
+    forecast_dir = forecast.output_dir
+    forecast_dir.mkdir(parents=True)
     old_sidecar = forecast_dir / "radar_test_20260605_1805_fct10.json"
     old_custom = forecast_dir / "radar_test_20260605_1805_fct10_custom.png"
     old_parent_overlay = forecast_dir / "radar_test_20260605_1805_fct10_overlay.png"
@@ -133,3 +144,30 @@ def test_prune_product_outputs_uses_forecast_variant_overrides(tmp_path: Path) -
     assert not old_sidecar.exists()
     assert not old_custom.exists()
     assert old_parent_overlay.exists()
+
+
+def test_prune_product_outputs_deletes_disabled_forecast_outputs(tmp_path: Path) -> None:
+    product = replace(
+        _product(tmp_path, retention=RetentionPolicy(keep_for_seconds=7200)),
+        output_dir=tmp_path / "out" / "test",
+    )
+    forecast = replace(
+        ForecastProduct(
+            id="test_forecast",
+            parent=product,
+            field_dir=tmp_path / "fields",
+        ),
+        enabled=False,
+    )
+    forecast_dir = forecast.output_dir
+    forecast_dir.mkdir(parents=True)
+    old_sidecar = forecast_dir / "radar_test_20260605_1805_fct10.json"
+    old_overlay = forecast_dir / "radar_test_20260605_1805_fct10_overlay.png"
+    for path in (old_sidecar, old_overlay):
+        path.write_bytes(b"x")
+
+    result = prune_product_outputs([product], forecasts=[forecast], now=datetime(2026, 6, 5, 21, 5))
+
+    assert result.deleted == (old_sidecar, old_overlay)
+    assert not old_sidecar.exists()
+    assert not old_overlay.exists()

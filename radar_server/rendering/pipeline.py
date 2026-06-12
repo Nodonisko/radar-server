@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .colorize import colorize
 from .composite import composite_to_web_mercator
@@ -37,6 +37,7 @@ _MAX_WORKERS = max(1, os.cpu_count() or 1)
 DEFAULT_VARIANTS: Tuple[Tuple[str, float], ...] = (("overlay", 1.0), ("overlay_small", 1.5))
 
 Bounds = Tuple[float, float, float, float]  # west, south, east, north (WGS84)
+OutputReadyCallback = Callable[[Path], None]
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ def _emit(
     optimize: bool,
     sources: Sequence[str],
     timings: _EmitTimings,
+    on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Shared tail: downsample -> colorize -> write PNG variants and sidecar."""
     emit_start = time.perf_counter()
@@ -129,6 +131,11 @@ def _emit(
         timings.png_write += time.perf_counter() - step_start
         timings.png_save += png_timings.save
         timings.oxipng += png_timings.oxipng
+        if on_output_ready is not None:
+            try:
+                on_output_ready(path)
+            except Exception:
+                LOGGER.exception("Output-ready callback failed for %s", path)
 
         written[name] = path
         manifest[name] = {
@@ -165,6 +172,7 @@ def render_radar_png(
     base: str,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
+    on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Render one HDF5 file to lossless Web Mercator overlay PNG(s).
 
@@ -182,7 +190,17 @@ def render_radar_png(
     reproject_time = time.perf_counter() - step_start
 
     emit_timings = _EmitTimings()
-    result = _emit(field, output_dir, palette, base, variants, optimize, sources=[hdf_path.name], timings=emit_timings)
+    result = _emit(
+        field,
+        output_dir,
+        palette,
+        base,
+        variants,
+        optimize,
+        sources=[hdf_path.name],
+        timings=emit_timings,
+        on_output_ready=on_output_ready,
+    )
     _log_render_performance(
         base=base,
         source_count=1,
@@ -206,6 +224,7 @@ def render_composite_png(
     bounds: Optional[Bounds] = None,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
+    on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Merge multiple HDF5 files into one overlay PNG (+ variants).
 
@@ -228,7 +247,17 @@ def render_composite_png(
     composite_time = time.perf_counter() - step_start
 
     emit_timings = _EmitTimings()
-    result = _emit(field, output_dir, palette, base, variants, optimize, sources=[p.name for p in paths], timings=emit_timings)
+    result = _emit(
+        field,
+        output_dir,
+        palette,
+        base,
+        variants,
+        optimize,
+        sources=[p.name for p in paths],
+        timings=emit_timings,
+        on_output_ready=on_output_ready,
+    )
     _log_render_performance(
         base=base,
         source_count=len(paths),

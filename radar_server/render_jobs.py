@@ -15,7 +15,7 @@ from typing import Iterable
 from .config import GeoBounds, InputConfig, ProductConfig, RenderContext
 from .fetching import LocalInputFile
 from .input_index import LocalInputIndex
-from .rendering.pipeline import Bounds, RenderResult
+from .rendering.pipeline import Bounds, OutputReadyCallback, RenderResult
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,16 +59,22 @@ def render_ready_jobs(
     products: Iterable[ProductConfig],
     *,
     include_existing: bool = False,
+    on_output_ready: OutputReadyCallback | None = None,
 ) -> list[RenderResult]:
     results: list[RenderResult] = []
     for job in resolve_render_jobs(input_index, tuple(products), include_existing=include_existing):
-        result = render_job(job, skip_existing=not include_existing)
+        result = render_job(job, skip_existing=not include_existing, on_output_ready=on_output_ready)
         if result is not None:
             results.append(result)
     return results
 
 
-def render_job(job: RenderJob, *, skip_existing: bool = True) -> RenderResult | None:
+def render_job(
+    job: RenderJob,
+    *,
+    skip_existing: bool = True,
+    on_output_ready: OutputReadyCallback | None = None,
+) -> RenderResult | None:
     if skip_existing and outputs_exist(job):
         return None
 
@@ -88,6 +94,7 @@ def render_job(job: RenderJob, *, skip_existing: bool = True) -> RenderResult | 
             base=base,
             variants=render.variants,
             optimize=render.optimize,
+            on_output_ready=on_output_ready,
         )
     return render.pipeline.render_composite(
         paths,
@@ -97,6 +104,7 @@ def render_job(job: RenderJob, *, skip_existing: bool = True) -> RenderResult | 
         bounds=bounds,
         variants=render.variants,
         optimize=render.optimize,
+        on_output_ready=on_output_ready,
     )
 
 

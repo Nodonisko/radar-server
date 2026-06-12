@@ -38,6 +38,34 @@ Create local `.env`:
 METEOGATE_API_KEY=...
 ```
 
+Optional Cloudflare R2 uploads for rendered PNG outputs:
+
+```bash
+RADAR_R2_ENABLED=1
+RADAR_R2_ACCOUNT_ID=...
+RADAR_R2_BUCKET=...
+RADAR_R2_ACCESS_KEY_ID=...
+RADAR_R2_SECRET_ACCESS_KEY=...
+RADAR_R2_PREFIX=
+```
+
+When enabled, each optimized PNG is queued for background upload as soon as it
+is written. Uploads are retried with backoff after failures, and successful
+uploads are recorded in `radar_server/output/.r2_upload_state.json`. On startup
+and `run-once`, local PNGs without a current success record are queued again, so
+a crash or temporary R2 outage is retried while the local file remains inside
+the retention window.
+
+R2 object keys mirror paths below `radar_server/output/`; for example,
+`output/cz/radar_cz_20260605_2105_overlay.png` uploads as
+`cz/radar_cz_20260605_2105_overlay.png`, and forecast files under
+`output/forecast/cz/` upload as `forecast/cz/...`. Set `RADAR_R2_PREFIX` only
+if you want an additional object-key prefix. JSON sidecars are not uploaded.
+
+Configure an R2 bucket lifecycle rule that expires radar PNGs after the same
+retention period you expect clients to use. Local pruning does not delete remote
+objects. Uploaded PNGs use `Cache-Control: public, max-age=31536000, immutable`.
+
 ## Commands
 
 ```bash
@@ -111,7 +139,7 @@ MQTT / polling (main thread, networking only)
 - Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
   (atomic clear-and-replace, latest issue only); rendering reads them like
   ordinary inputs, so it is idempotent and restart-durable.
-- Frames render to `<parent output_dir>/forecast/<base>_fctNN_overlay.png`.
+- Frames render to `output/forecast/<parent>/<base>_fctNN_overlay.png`.
 
 ## Fetching
 

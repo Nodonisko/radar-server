@@ -16,7 +16,14 @@ from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec
 from .rendering.palettes import STANDARD_DBZH
-from .rendering.pipeline import DEFAULT_VARIANTS, Bounds, RenderResult, render_composite_png, render_radar_png
+from .rendering.pipeline import (
+    DEFAULT_VARIANTS,
+    Bounds,
+    OutputReadyCallback,
+    RenderResult,
+    render_composite_png,
+    render_radar_png,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,7 +34,7 @@ ENV_FILE = BASE_DIR.parent / ".env"
 
 def _get_env_value(name: str) -> str | None:
     value = os.environ.get(name)
-    if value:
+    if value is not None:
         return value
     if not ENV_FILE.exists():
         return None
@@ -125,6 +132,7 @@ class SingleFileRenderer(Protocol):
         base: str,
         variants: Sequence[VariantSpec] = DEFAULT_VARIANTS,
         optimize: bool = True,
+        on_output_ready: OutputReadyCallback | None = None,
     ) -> RenderResult: ...
 
 
@@ -139,6 +147,7 @@ class CompositeRenderer(Protocol):
         bounds: Bounds | None = None,
         variants: Sequence[VariantSpec] = DEFAULT_VARIANTS,
         optimize: bool = True,
+        on_output_ready: OutputReadyCallback | None = None,
     ) -> RenderResult: ...
 
 
@@ -321,7 +330,7 @@ class ForecastProduct:
 
     @property
     def output_dir(self) -> Path:
-        return self.parent.output_dir / "forecast"
+        return self.parent.output_dir.parent / "forecast" / self.parent.id
 
     @property
     def render_variants(self) -> tuple[VariantSpec, ...]:

@@ -65,7 +65,6 @@ def prune_product_outputs(
 ) -> PruneResult:
     reference = now or datetime.utcnow()
     deleted: list[Path] = []
-    forecasts_by_parent = _forecasts_by_parent_id(forecasts)
     for product in products:
         keep_for = product.retention.keep_for_seconds
         if keep_for is None or not product.output_dir.exists():
@@ -81,17 +80,19 @@ def prune_product_outputs(
                     _unlink(path)
                     deleted.append(path)
 
-        forecast_dir = product.output_dir / "forecast"
-        if forecast_dir.exists():
-            forecast_variants = _forecast_variants_for_product(product, forecasts_by_parent)
-            for sidecar in sorted(forecast_dir.glob("*.json")):
-                timestamp = _timestamp_from_forecast_sidecar(product, sidecar)
-                if timestamp is None or timestamp >= cutoff:
-                    continue
-                for path in _output_frame_paths(sidecar, forecast_variants):
-                    if path.exists():
-                        _unlink(path)
-                        deleted.append(path)
+    for forecast in forecasts:
+        keep_for = forecast.retention.keep_for_seconds
+        if keep_for is None or not forecast.output_dir.exists():
+            continue
+        cutoff = reference - timedelta(seconds=keep_for)
+        for sidecar in sorted(forecast.output_dir.glob("*.json")):
+            timestamp = _timestamp_from_forecast_sidecar(forecast.parent, sidecar)
+            if timestamp is None or timestamp >= cutoff:
+                continue
+            for path in _output_frame_paths(sidecar, forecast.render_variants):
+                if path.exists():
+                    _unlink(path)
+                    deleted.append(path)
 
     return PruneResult(tuple(deleted))
 
@@ -133,30 +134,6 @@ def _product_prefix(product: ProductConfig) -> str:
     if base.endswith(suffix):
         return base[: -len(suffix)]
     return ""
-
-
-def _forecasts_by_parent_id(forecasts: Iterable[ForecastProduct]) -> dict[str, tuple[ForecastProduct, ...]]:
-    grouped: dict[str, list[ForecastProduct]] = {}
-    for forecast in forecasts:
-        if not forecast.enabled:
-            continue
-        grouped.setdefault(forecast.parent.id, []).append(forecast)
-    return {parent_id: tuple(items) for parent_id, items in grouped.items()}
-
-
-def _forecast_variants_for_product(
-    product: ProductConfig,
-    forecasts_by_parent: dict[str, tuple[ForecastProduct, ...]],
-) -> tuple[VariantSpec, ...]:
-    forecasts = forecasts_by_parent.get(product.id)
-    if not forecasts:
-        return product.render.variants
-    variants: list[VariantSpec] = []
-    for forecast in forecasts:
-        for variant in forecast.render_variants:
-            if variant not in variants:
-                variants.append(variant)
-    return tuple(variants)
 
 
 def _output_frame_paths(sidecar: Path, variants: tuple[VariantSpec, ...]) -> tuple[Path, ...]:

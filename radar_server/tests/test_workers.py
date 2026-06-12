@@ -72,13 +72,28 @@ class _ManualExecutor:
 def _fake_pipeline(calls: list, *, fail_bases: set[str] | None = None) -> RenderPipeline:
     failing = fail_bases or set()
 
-    def render_single(hdf_path, output_dir, palette, *, base, variants=(), optimize=True):  # noqa: ANN001
+    def render_single(hdf_path, output_dir, palette, *, base, variants=(), optimize=True, on_output_ready=None):  # noqa: ANN001
         raise AssertionError("single renderer should not be used when bounds are set")
 
-    def render_composite(paths, output_dir, palette, *, base, bounds=None, variants=(), optimize=True):  # noqa: ANN001
+    def render_composite(  # noqa: ANN001
+        paths,
+        output_dir,
+        palette,
+        *,
+        base,
+        bounds=None,
+        variants=(),
+        optimize=True,
+        on_output_ready=None,
+    ):
         if base in failing:
             raise RuntimeError(f"render failed for {base}")
         calls.append(base)
+        if on_output_ready is not None:
+            output_path = output_dir / f"{base}_overlay.png"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"png")
+            on_output_ready(output_path)
         return RenderResult(base=base, variants={}, sidecar=output_dir / f"{base}.json", bounds=bounds)
 
     return RenderPipeline(id="fake", render_single=render_single, render_composite=render_composite)

@@ -25,7 +25,7 @@ from .fetching import InputSyncResult, sync_inputs
 from .input_index import LocalInputIndex
 from .pruning import prune_all
 from .render_jobs import render_ready_jobs
-from .rendering.pipeline import RenderResult
+from .rendering.pipeline import OutputReadyCallback, RenderResult
 
 LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ class RadarScheduler:
         sleep_func: Sleep = time.sleep,
         now: datetime | None = None,
         index_inputs: Iterable[InputConfig] | None = None,
+        on_output_ready: OutputReadyCallback | None = None,
     ) -> None:
         reference = now or datetime.utcnow()
         self.config = config
@@ -78,6 +79,7 @@ class RadarScheduler:
         self.sync_func = sync_func
         self.render_func = render_func
         self.sleep_func = sleep_func
+        self.on_output_ready = on_output_ready
         self._state_lock = threading.Lock()
         self.source_states = {
             source.id: SourceScheduleState(
@@ -157,7 +159,16 @@ class RadarScheduler:
             now=reference,
         )
         self.input_index = LocalInputIndex.from_filesystem(self.index_inputs, now=reference)
-        rendered = tuple(self.render_func(self.input_index, self.config.products))
+        if self.on_output_ready is None:
+            rendered = tuple(self.render_func(self.input_index, self.config.products))
+        else:
+            rendered = tuple(
+                self.render_func(
+                    self.input_index,
+                    self.config.products,
+                    on_output_ready=self.on_output_ready,
+                )
+            )
         return SchedulerCycleResult(synced=synced, rendered=rendered)
 
     def step(self, now: datetime | None = None, *, limit_per_input: int | None = None) -> SchedulerCycleResult | None:

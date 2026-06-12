@@ -20,7 +20,7 @@ def test_forecast_product_reuses_parent_settings() -> None:
     assert cz_forecast.render_variants == cz_product.render.variants
     assert cz_forecast.optimize == cz_product.render.optimize
     assert cz_forecast.retention is cz_product.retention
-    assert cz_forecast.output_dir == cz_product.output_dir / "forecast"
+    assert cz_forecast.output_dir == cz_product.output_dir.parent / "forecast" / "cz"
     assert cz_forecast.field_dir == DATA_DIR / "cz" / "forecast_fields"
 
 

@@ -39,6 +39,7 @@ from .queueing import (
 from .render_jobs import outputs_exist, render_job, resolve_render_jobs
 from .rendering.core import RadarField
 from .rendering.forecast import render_forecast_field
+from .rendering.pipeline import OutputReadyCallback
 
 LOGGER = logging.getLogger(__name__)
 
@@ -154,10 +155,12 @@ class RenderWorker(_QueueWorker):
         render_queue: PriorityWorkQueue,
         *,
         want_board: ForecastWantBoard | None = None,
+        on_output_ready: OutputReadyCallback | None = None,
         poll_interval: float = 0.5,
     ) -> None:
         super().__init__(render_queue, name="render-worker", poll_interval=poll_interval)
         self._want_board = want_board
+        self._on_output_ready = on_output_ready
 
     def _execute(self, task) -> None:  # noqa: ANN001
         if isinstance(task, ObservedRenderTask):
@@ -185,7 +188,7 @@ class RenderWorker(_QueueWorker):
                 [path.name for path in missing],
             )
             return
-        render_job(job, skip_existing=True)
+        render_job(job, skip_existing=True, on_output_ready=self._on_output_ready)
 
     def _render_forecast(self, task: ForecastRenderTask) -> None:
         forecast = task.forecast
@@ -211,6 +214,7 @@ class RenderWorker(_QueueWorker):
             minute=task.minute,
             variants=forecast.render_variants,
             optimize=forecast.optimize,
+            on_output_ready=self._on_output_ready,
         )
 
 

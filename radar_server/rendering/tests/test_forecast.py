@@ -31,6 +31,7 @@ def _field(values: np.ndarray, timestamp: datetime) -> RadarField:
 def test_render_forecast_field_writes_variants_and_sidecar(tmp_path) -> None:  # noqa: ANN001
     timestamp = datetime(2026, 6, 5, 21, 10)
     field = _field(np.array([[10.0, np.nan], [35.0, 52.0]]), timestamp)
+    ready_paths = []
 
     result = render_forecast_field(
         field,
@@ -40,6 +41,7 @@ def test_render_forecast_field_writes_variants_and_sidecar(tmp_path) -> None:  #
         minute=10,
         variants=(("overlay", 1.0),),
         optimize=False,
+        on_output_ready=ready_paths.append,
     )
 
     assert result.base == "radar_test_20260605_2100_fct10"
@@ -51,3 +53,4 @@ def test_render_forecast_field_writes_variants_and_sidecar(tmp_path) -> None:  #
     assert manifest["timestamp"] == timestamp.isoformat()
     assert manifest["sources"] == ["forecast_10m"]
     assert "overlay" in manifest["variants"]
+    assert ready_paths == [overlay]

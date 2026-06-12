@@ -239,6 +239,23 @@ def test_render_writes_variants_and_sidecar(tmp_path: Path) -> None:
     assert set(payload["bounds"]) == {"west", "south", "east", "north"}
 
 
+def test_render_notifies_when_each_png_variant_is_ready(tmp_path: Path) -> None:
+    ready_paths: list[Path] = []
+
+    result = render_radar_png(
+        _sample(),
+        tmp_path,
+        STANDARD_DBZH,
+        base="frame",
+        optimize=False,
+        on_output_ready=ready_paths.append,
+    )
+
+    assert ready_paths == [result.variants["overlay"], result.variants["overlay_small"]]
+    assert all(path.exists() for path in ready_paths)
+    assert result.sidecar not in ready_paths
+
+
 def test_render_logs_single_performance_summary(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
 
