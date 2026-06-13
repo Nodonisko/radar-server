@@ -85,6 +85,30 @@ def test_generate_forecast_fields_applies_floor_level(monkeypatch) -> None:  # n
     assert (generated[20].values == 30.0).all()
 
 
+def test_generate_forecast_fields_handles_empty_latest_field(monkeypatch) -> None:  # noqa: ANN001
+    def fail_motion_method(method: str):  # noqa: ANN001
+        raise AssertionError("motion should not run for an empty latest field")
+
+    def fail_extrapolation_method():
+        raise AssertionError("extrapolation should not run for an empty latest field")
+
+    monkeypatch.setattr(forecast_generation, "_motion_method", fail_motion_method)
+    monkeypatch.setattr(forecast_generation, "_extrapolation_method", fail_extrapolation_method)
+    timestamp = datetime(2026, 6, 5, 21, 0)
+    fields = [
+        _field(np.array([[10.0, np.nan], [15.0, 20.0]]), timestamp),
+        _field(np.full((2, 2), np.nan), timestamp + timedelta(minutes=5)),
+    ]
+
+    generated = generate_forecast_fields(fields, minutes=(10, 20))
+
+    assert sorted(generated) == [10, 20]
+    assert all(np.isnan(field.values).all() for field in generated.values())
+    assert generated[10].timestamp == timestamp + timedelta(minutes=15)
+    assert generated[20].timestamp == timestamp + timedelta(minutes=25)
+    assert generated[10].transform == fields[-1].transform
+
+
 def test_generate_forecast_fields_dedupes_minutes(monkeypatch) -> None:  # noqa: ANN001
     captured: dict = {}
     _patch_pysteps(monkeypatch, captured, lead_values=(20.0,))

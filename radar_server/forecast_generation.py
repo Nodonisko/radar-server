@@ -85,6 +85,15 @@ def generate_forecast_fields(
         raise ValueError("fields must be ordered chronologically with increasing timestamps")
 
     generation_start = time.perf_counter()
+    latest = fields[-1]
+
+    if not np.isfinite(latest.values).any():
+        LOGGER.info(
+            "Generated transparent forecast fields for %s: latest field contains no finite %s pixels",
+            latest.timestamp,
+            latest.quantity,
+        )
+        return _transparent_forecast_fields(latest, unique_minutes)
 
     # Keep NaN as a radar mask. Motion methods accept masked arrays, and
     # extrapolation allows non-finite values for no-observation pixels.
@@ -100,7 +109,6 @@ def generate_forecast_fields(
     forecast_stack = _extrapolation_method()(fields[-1].values, velocity, lead_steps)
     extrapolate_time = time.perf_counter() - step_start
 
-    latest = fields[-1]
     _log_generation_performance(
         source_count=len(fields),
         lead_count=len(unique_minutes),
@@ -118,6 +126,19 @@ def generate_forecast_fields(
             data[data <= floor_level] = np.nan
         generated[minute] = RadarField(
             values=data,
+            crs=latest.crs,
+            transform=latest.transform,
+            quantity=latest.quantity,
+            timestamp=latest.timestamp + timedelta(minutes=minute),
+        )
+    return generated
+
+
+def _transparent_forecast_fields(latest: RadarField, minutes: Sequence[int]) -> dict[int, RadarField]:
+    generated: dict[int, RadarField] = {}
+    for minute in minutes:
+        generated[minute] = RadarField(
+            values=np.full(latest.values.shape, np.nan, dtype=np.float32),
             crs=latest.crs,
             transform=latest.transform,
             quantity=latest.quantity,
