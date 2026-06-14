@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 from radar_server.config import (
@@ -54,3 +55,10 @@ def test_config_wires_every_product_to_a_forecast() -> None:
     assert parent_ids == {product.id for product in CONFIG.products}
     assert all(forecast.history_frames == 3 for forecast in FORECAST_PRODUCTS)
     assert all(forecast.method == "lucaskanade" for forecast in FORECAST_PRODUCTS)
+
+
+def test_configured_product_bounds_use_at_most_two_decimals() -> None:
+    for product in PRODUCTS:
+        bounds = product.geo_bounds
+        values = (bounds.west, bounds.south, bounds.east, bounds.north)
+        assert all(-Decimal(str(value)).as_tuple().exponent <= 2 for value in values)

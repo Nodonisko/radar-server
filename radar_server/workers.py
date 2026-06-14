@@ -36,7 +36,7 @@ from .queueing import (
     PollIngestTask,
     PriorityWorkQueue,
 )
-from .render_jobs import outputs_exist, render_job, resolve_render_jobs
+from .render_jobs import bounds_tuple, outputs_exist, render_job, resolve_render_jobs
 from .rendering.core import RadarField
 from .rendering.forecast import render_forecast_field
 from .rendering.pipeline import OutputReadyCallback
@@ -214,6 +214,7 @@ class RenderWorker(_QueueWorker):
             minute=task.minute,
             variants=forecast.render_variants,
             optimize=forecast.optimize,
+            bounds=bounds_tuple(forecast.geo_bounds),
             on_output_ready=self._on_output_ready,
         )
 

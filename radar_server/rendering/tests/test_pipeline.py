@@ -10,6 +10,7 @@ import atexit
 import json
 import logging
 import shutil
+import struct
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,26 @@ def _sample() -> Path:
         atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
         _SAMPLE = _write_synthetic_odim(tmpdir / "synthetic.hdf")
     return _SAMPLE
+
+
+def _png_comment(path: Path) -> str | None:
+    blob = path.read_bytes()
+    pos = 8
+    while pos < len(blob):
+        length = struct.unpack(">I", blob[pos : pos + 4])[0]
+        chunk_type = blob[pos + 4 : pos + 8]
+        data = blob[pos + 8 : pos + 8 + length]
+        if chunk_type == b"tEXt" and data.startswith(b"Comment\x00"):
+            return data.split(b"\x00", 1)[1].decode("latin-1")
+        pos += 12 + length
+        if chunk_type == b"IEND":
+            break
+    return None
+
+
+def _geobox_from_bounds(bounds: dict[str, float]) -> str:
+    values = (bounds["west"], bounds["south"], bounds["east"], bounds["north"])
+    return "GeoBox=" + ",".join(str(value) for value in values)
 
 
 def _grid(values: np.ndarray, px: float = 10.0) -> RadarField:
@@ -237,6 +258,9 @@ def test_render_writes_variants_and_sidecar(tmp_path: Path) -> None:
     assert payload["palette"] == "dbzh"
     assert set(payload["variants"]) == {"overlay", "overlay_small"}
     assert set(payload["bounds"]) == {"west", "south", "east", "north"}
+    expected_geobox = _geobox_from_bounds(payload["bounds"])
+    assert _png_comment(result.variants["overlay"]) == expected_geobox
+    assert _png_comment(result.variants["overlay_small"]) == expected_geobox
 
 
 def test_render_notifies_when_each_png_variant_is_ready(tmp_path: Path) -> None:
@@ -362,3 +386,5 @@ def test_composite_crops_to_custom_bounds(tmp_path: Path) -> None:
 
     payload = json.loads(comp.sidecar.read_text())
     assert payload["sources"] == [sample.name]
+    assert payload["bounds"] == {"west": bounds[0], "south": bounds[1], "east": bounds[2], "north": bounds[3]}
+    assert _png_comment(comp.variants["overlay"]) == _geobox_from_bounds(payload["bounds"])

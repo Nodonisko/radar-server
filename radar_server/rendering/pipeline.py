@@ -104,6 +104,7 @@ def _emit(
     optimize: bool,
     sources: Sequence[str],
     timings: _EmitTimings,
+    metadata_bounds: Bounds | None = None,
     on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Shared tail: downsample -> colorize -> write PNG variants and sidecar."""
@@ -111,7 +112,8 @@ def _emit(
     if not variants:
         raise ValueError("variants must not be empty")
     output_dir.mkdir(parents=True, exist_ok=True)
-    bounds = lonlat_bounds(field)
+    bounds = metadata_bounds if metadata_bounds is not None else lonlat_bounds(field)
+    geobox_comment = _geobox_comment(bounds)
 
     written: Dict[str, Path] = {}
     manifest: Dict[str, dict] = {}
@@ -127,7 +129,7 @@ def _emit(
         path = output_dir / f"{base}_{name}.png"
         step_start = time.perf_counter()
         png_timings = PngWriteTimings()
-        write_png(image, path, optimize=optimize, timings=png_timings)
+        write_png(image, path, optimize=optimize, comment=geobox_comment, timings=png_timings)
         timings.png_write += time.perf_counter() - step_start
         timings.png_save += png_timings.save
         timings.oxipng += png_timings.oxipng
@@ -162,6 +164,10 @@ def _emit(
     timings.total = time.perf_counter() - emit_start
 
     return RenderResult(base=base, variants=written, sidecar=sidecar, bounds=bounds)
+
+
+def _geobox_comment(bounds: Bounds) -> str:
+    return "GeoBox=" + ",".join(str(value) for value in bounds)
 
 
 def render_radar_png(
@@ -256,6 +262,7 @@ def render_composite_png(
         optimize,
         sources=[p.name for p in paths],
         timings=emit_timings,
+        metadata_bounds=bounds,
         on_output_ready=on_output_ready,
     )
     _log_render_performance(
