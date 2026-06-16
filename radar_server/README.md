@@ -136,6 +136,10 @@ MQTT / polling (main thread, networking only)
   palette, and variants.
 - Default: Lucas-Kanade motion from 3 history frames, lead times
   10–60 min in 10 min steps.
+- The smooth motion field is densified on a grid coarsened by
+  `ForecastProduct.motion_grid_step` (default 2) and upscaled, which roughly
+  halves generation time versus full-resolution interpolation (set to 1 to
+  disable).
 - Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
   (atomic clear-and-replace, latest issue only); rendering reads them like
   ordinary inputs, so it is idempotent and restart-durable.

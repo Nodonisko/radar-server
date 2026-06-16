@@ -315,6 +315,11 @@ class ForecastProduct:
     variants: tuple[VariantSpec, ...] | None = None
     field_dir: Path | None = None
     enabled: bool = True
+    # Lucas-Kanade densifies sparse motion vectors onto the full grid, which
+    # dominates generation cost. The motion field is smooth, so we interpolate
+    # it on a grid coarsened by this factor and upscale; >1 trades a tiny amount
+    # of accuracy for a large speedup. 1 keeps the full-resolution motion field.
+    motion_grid_step: int = 2
 
     def __post_init__(self) -> None:
         if self.field_dir is None:

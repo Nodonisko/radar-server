@@ -159,6 +159,7 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
         minutes=(10,),
         method="proesmans",
         field_dir=tmp_path / "fields",
+        motion_grid_step=3,
     )
     issue = datetime(2026, 6, 5, 21, 0)
     task = ForecastGenTask(
@@ -176,11 +177,12 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
         captured["task"] = load_task
         return history_fields
 
-    def fake_generate(fields, *, minutes, method, floor_level):  # noqa: ANN001
+    def fake_generate(fields, *, minutes, method, floor_level, motion_grid_step):  # noqa: ANN001
         captured["fields"] = fields
         captured["minutes"] = minutes
         captured["generation_method"] = method
         captured["floor_level"] = floor_level
+        captured["motion_grid_step"] = motion_grid_step
         return {10: fields[-1]}
 
     monkeypatch.setattr(forecast_generation, "load_history_fields", fake_load_history)
@@ -194,3 +196,55 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
     assert captured["minutes"] == (10,)
     assert captured["generation_method"] == "proesmans"
     assert captured["floor_level"] == forecast.palette.levels[0]
+    assert captured["motion_grid_step"] == 3
+
+
+def test_coarse_motion_matches_full_resolution() -> None:
+    """The coarsened motion grid yields a full-resolution, near-identical forecast."""
+
+    pytest.importorskip("pysteps")
+    pytest.importorskip("cv2")
+
+    rng = np.random.default_rng(0)
+    height, width = 96, 120
+    yy, xx = np.mgrid[0:height, 0:width]
+    noise = rng.normal(0.0, 1.5, size=(height, width)).astype(np.float32)
+    base = datetime(2026, 6, 5, 21, 0)
+    fields = [
+        _field(
+            40.0 * np.exp(-(((xx - (30 + 6 * i)) ** 2 + (yy - (40 + 3 * i)) ** 2) / (2 * 8.0**2))) + noise,
+            base + timedelta(minutes=5 * i),
+        )
+        for i in range(3)
+    ]
+
+    full = generate_forecast_fields(fields, minutes=(10, 20, 30), motion_grid_step=1)
+    coarse = generate_forecast_fields(fields, minutes=(10, 20, 30), motion_grid_step=2)
+
+    assert sorted(full) == sorted(coarse) == [10, 20, 30]
+    for minute in full:
+        assert coarse[minute].values.shape == (height, width)
+        a, b = full[minute].values, coarse[minute].values
+        mask = np.isfinite(a) & np.isfinite(b)
+        rmse = float(np.sqrt(np.mean((a[mask] - b[mask]) ** 2)))
+        assert rmse < 3.0, f"minute {minute}: coarse motion diverged (RMSE {rmse:.2f})"
+
+
+def test_coarse_motion_falls_back_on_tiny_grid(monkeypatch) -> None:  # noqa: ANN001
+    """A grid too small to coarsen must fall back to the full dense method."""
+
+    calls: dict = {}
+
+    def fake_motion_method(method: str):
+        def fake_motion(input_images, **kwargs):  # noqa: ANN001, ANN003
+            calls["dense"] = kwargs.get("dense", True)
+            return np.zeros((2, *input_images.shape[1:]), dtype=np.float32)
+
+        return fake_motion
+
+    monkeypatch.setattr(forecast_generation, "_motion_method", fake_motion_method)
+
+    motion_input = np.ma.masked_invalid(np.zeros((3, 2, 2), dtype=np.float32))
+    forecast_generation._compute_motion("lucaskanade", motion_input, grid_step=2)
+
+    assert calls["dense"] is True

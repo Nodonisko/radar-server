@@ -56,6 +56,7 @@ def generate_for_task(task: ForecastGenTask) -> dict[int, RadarField]:
         minutes=forecast.minutes,
         method=forecast.method,
         floor_level=forecast.palette.levels[0],
+        motion_grid_step=forecast.motion_grid_step,
     )
 
 
@@ -65,10 +66,15 @@ def generate_forecast_fields(
     minutes: Sequence[int],
     method: str = "lucaskanade",
     floor_level: float | None = None,
+    motion_grid_step: int = 1,
 ) -> dict[int, RadarField]:
     """Extrapolate ``fields`` (chronological, oldest first) ``minutes`` ahead.
 
     Values at or below ``floor_level`` become NaN so they render transparent.
+
+    ``motion_grid_step`` > 1 densifies the (smooth) Lucas-Kanade motion field on
+    a coarsened grid and upscales it, which is much cheaper than interpolating
+    every pixel; 1 keeps the full-resolution motion field.
     """
 
     if len(fields) < 2:
@@ -100,7 +106,7 @@ def generate_forecast_fields(
     motion_input = np.ma.masked_invalid(np.stack([field.values for field in fields]))
 
     step_start = time.perf_counter()
-    velocity = _compute_motion(_motion_method(method), motion_input)
+    velocity = _compute_motion(method, motion_input, grid_step=motion_grid_step)
     motion_time = time.perf_counter() - step_start
 
     lead_steps = [minute / dt for minute in unique_minutes]
@@ -115,6 +121,7 @@ def generate_forecast_fields(
         field=latest,
         total=time.perf_counter() - generation_start,
         method=method,
+        motion_grid_step=motion_grid_step,
         motion=motion_time,
         extrapolate=extrapolate_time,
     )
@@ -154,13 +161,14 @@ def _log_generation_performance(
     field: RadarField,
     total: float,
     method: str,
+    motion_grid_step: int,
     motion: float,
     extrapolate: float,
 ) -> None:
     LOGGER.info(
         (
             "Generated forecast fields in %.0fms | sources=%d lead_times=%d "
-            "size=%dx%d method=%s motion=%.0fms extrapolate=%.0fms"
+            "size=%dx%d method=%s motion_step=%d motion=%.0fms extrapolate=%.0fms"
         ),
         total * 1000,
         source_count,
@@ -168,6 +176,7 @@ def _log_generation_performance(
         field.transform.width,
         field.transform.height,
         method,
+        motion_grid_step,
         motion * 1000,
         extrapolate * 1000,
     )
@@ -191,9 +200,63 @@ def _import_pysteps_modules():  # noqa: ANN202
     return motion, nowcasts
 
 
-def _compute_motion(oflow_method, motion_input):  # noqa: ANN001, ANN202
+# pysteps' Lucas-Kanade default for declustering sparse vectors before the
+# dense interpolation; mirrored here so the coarse path tracks identically.
+_DECL_SCALE = 20
+
+
+def _compute_motion(method: str, motion_input, *, grid_step: int):  # noqa: ANN001, ANN202
+    oflow_method = _motion_method(method)
+    if grid_step > 1 and method == "lucaskanade":
+        velocity = _coarse_lucaskanade_velocity(oflow_method, motion_input, grid_step)
+        if velocity is not None:
+            return velocity
     kwargs = {"verbose": False} if _accepts_keyword(oflow_method, "verbose") else {}
     return oflow_method(motion_input, **kwargs)
+
+
+def _coarse_lucaskanade_velocity(oflow_method, motion_input, grid_step: int):  # noqa: ANN001, ANN202
+    """Lucas-Kanade motion densified on a coarsened grid, then upscaled.
+
+    Tracking and feature detection are cheap; the cost is interpolating the
+    sparse vectors onto every pixel. The motion field is smooth, so we run that
+    interpolation on a grid coarsened by ``grid_step`` and bilinearly upscale.
+
+    Returns ``None`` to signal the caller to fall back to the full-grid method
+    when the grid is too small to coarsen.
+    """
+    height, width = motion_input.shape[1:]
+    xgrid = np.arange(0, width, grid_step)
+    ygrid = np.arange(0, height, grid_step)
+    if xgrid.size < 2 or ygrid.size < 2:
+        return None
+
+    kwargs = {"verbose": False} if _accepts_keyword(oflow_method, "verbose") else {}
+    xy, uv = oflow_method(motion_input, dense=False, **kwargs)
+    if len(xy) == 0:
+        return np.zeros((2, height, width), dtype=np.float32)
+
+    idwinterp2d, decluster = _coarse_motion_tools()
+    xy, uv = decluster(xy, uv, _DECL_SCALE, 1, False)
+    coarse = np.asarray(idwinterp2d(xy, uv, xgrid, ygrid), dtype=np.float32)
+    return _upscale_velocity(coarse, width, height)
+
+
+def _upscale_velocity(coarse, width: int, height: int):  # noqa: ANN001, ANN202
+    import cv2
+
+    u = cv2.resize(np.ascontiguousarray(coarse[0]), (width, height), interpolation=cv2.INTER_LINEAR)
+    v = cv2.resize(np.ascontiguousarray(coarse[1]), (width, height), interpolation=cv2.INTER_LINEAR)
+    return np.stack([u, v])
+
+
+def _coarse_motion_tools():  # noqa: ANN202
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        from pysteps.utils import get_method as get_utils_method
+        from pysteps.utils.cleansing import decluster
+
+    return get_utils_method("idwinterp2d"), decluster
 
 
 def _accepts_keyword(func, name: str) -> bool:  # noqa: ANN001
