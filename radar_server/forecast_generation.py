@@ -60,6 +60,7 @@ def generate_for_task(task: ForecastGenTask) -> dict[int, RadarField]:
         motion_grid_max=forecast.motion_grid_max,
         fast_idw=forecast.fast_idw,
         fast_warp=forecast.fast_warp,
+        forecast_id=forecast.id,
     )
 
 
@@ -73,6 +74,7 @@ def generate_forecast_fields(
     motion_grid_max: int | None = None,
     fast_idw: bool = False,
     fast_warp: bool = False,
+    forecast_id: str | None = None,
 ) -> dict[int, RadarField]:
     """Extrapolate ``fields`` (chronological, oldest first) ``minutes`` ahead.
 
@@ -137,6 +139,7 @@ def generate_forecast_fields(
     extrapolate_time = time.perf_counter() - step_start
 
     _log_generation_performance(
+        forecast_id=forecast_id,
         source_count=len(fields),
         lead_count=len(unique_minutes),
         field=latest,
@@ -177,6 +180,7 @@ def _transparent_forecast_fields(latest: RadarField, minutes: Sequence[int]) -> 
 
 def _log_generation_performance(
     *,
+    forecast_id: str | None,
     source_count: int,
     lead_count: int,
     field: RadarField,
@@ -186,11 +190,16 @@ def _log_generation_performance(
     motion: float,
     extrapolate: float,
 ) -> None:
+    if forecast_id is None:
+        subject = "Generated forecast fields"
+    else:
+        subject = f"Generated {forecast_id} forecast fields"
     LOGGER.info(
         (
-            "Generated forecast fields in %.0fms | sources=%d lead_times=%d "
+            "%s in %.0fms | sources=%d lead_times=%d "
             "size=%dx%d method=%s motion_step=%d motion=%.0fms extrapolate=%.0fms"
         ),
+        subject,
         total * 1000,
         source_count,
         lead_count,
