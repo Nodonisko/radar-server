@@ -139,7 +139,16 @@ MQTT / polling (main thread, networking only)
 - The smooth motion field is densified on a grid coarsened by
   `ForecastProduct.motion_grid_step` (default 2) and upscaled, which roughly
   halves generation time versus full-resolution interpolation (set to 1 to
-  disable).
+  disable). `motion_grid_max` optionally caps the motion grid's longest edge so
+  densification stays near constant-time on very large products.
+- Two further portable CPU optimizations are on by default
+  (`ForecastProduct.fast_idw` / `fast_warp`, implemented in
+  `radar_server/forecast_fast.py`): a parallel kd-tree inverse-distance
+  interpolation (numerically identical to pysteps) and a `cv2.remap`
+  semi-Lagrangian extrapolation replacing `scipy.ndimage.map_coordinates`.
+  Together they cut generation time ~2.8x on the PL and Norway products (e.g.
+  Norway forecast-only ~8.8s → ~3.2s) for a <0.05 dBZ RMSE difference versus the
+  stock pysteps path. Disable either via config or the benchmark flags.
 - Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
   (atomic clear-and-replace, latest issue only); rendering reads them like
   ordinary inputs, so it is idempotent and restart-durable.

@@ -177,12 +177,12 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
         captured["task"] = load_task
         return history_fields
 
-    def fake_generate(fields, *, minutes, method, floor_level, motion_grid_step):  # noqa: ANN001
+    def fake_generate(fields, *, minutes, method, floor_level, **kwargs):  # noqa: ANN001, ANN003
         captured["fields"] = fields
         captured["minutes"] = minutes
         captured["generation_method"] = method
         captured["floor_level"] = floor_level
-        captured["motion_grid_step"] = motion_grid_step
+        captured.update(kwargs)
         return {10: fields[-1]}
 
     monkeypatch.setattr(forecast_generation, "load_history_fields", fake_load_history)
@@ -197,6 +197,9 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
     assert captured["generation_method"] == "proesmans"
     assert captured["floor_level"] == forecast.palette.levels[0]
     assert captured["motion_grid_step"] == 3
+    assert captured["motion_grid_max"] == forecast.motion_grid_max
+    assert captured["fast_idw"] == forecast.fast_idw
+    assert captured["fast_warp"] == forecast.fast_warp
 
 
 def test_coarse_motion_matches_full_resolution() -> None:
@@ -228,6 +231,52 @@ def test_coarse_motion_matches_full_resolution() -> None:
         mask = np.isfinite(a) & np.isfinite(b)
         rmse = float(np.sqrt(np.mean((a[mask] - b[mask]) ** 2)))
         assert rmse < 3.0, f"minute {minute}: coarse motion diverged (RMSE {rmse:.2f})"
+
+
+def test_fast_idw_matches_pysteps() -> None:
+    """The parallel kd-tree IDW must match pysteps to floating-point precision."""
+
+    pysteps_utils = pytest.importorskip("pysteps.utils")
+    from radar_server import forecast_fast
+
+    rng = np.random.default_rng(1)
+    xy = rng.uniform(0, 200, size=(60, 2))
+    uv = rng.normal(0, 5, size=(60, 2))
+    xgrid = np.arange(0, 200, 4)
+    ygrid = np.arange(0, 160, 4)
+
+    reference = pysteps_utils.get_method("idwinterp2d")(xy, uv, xgrid, ygrid)
+    fast = forecast_fast.idw_interpolate(xy, uv, xgrid, ygrid)
+
+    assert fast.shape == reference.shape
+    assert np.allclose(fast, reference, atol=1e-6)
+
+
+def test_fast_warp_matches_pysteps() -> None:
+    """The cv2.remap semi-Lagrangian warp must closely match scipy/pysteps."""
+
+    extrapolation = pytest.importorskip("pysteps.extrapolation")
+    pytest.importorskip("cv2")
+    from radar_server import forecast_fast
+
+    rng = np.random.default_rng(2)
+    height, width = 90, 110
+    precip = rng.normal(20.0, 5.0, size=(height, width)).astype(np.float32)
+    velocity = np.stack(
+        [
+            np.full((height, width), 1.5, dtype=np.float32),
+            np.full((height, width), -0.8, dtype=np.float32),
+        ]
+    )
+    lead_steps = [1.0, 2.0, 3.0]
+
+    reference = extrapolation.get_method("semilagrangian")(precip, velocity, lead_steps)
+    fast = forecast_fast.extrapolate(precip, velocity, lead_steps)
+
+    assert fast.shape == reference.shape
+    mask = np.isfinite(reference) & np.isfinite(fast)
+    rmse = float(np.sqrt(np.mean((reference[mask] - fast[mask]) ** 2)))
+    assert rmse < 0.5, f"cv2 warp diverged from scipy (RMSE {rmse:.3f})"
 
 
 def test_coarse_motion_falls_back_on_tiny_grid(monkeypatch) -> None:  # noqa: ANN001

@@ -320,6 +320,15 @@ class ForecastProduct:
     # it on a grid coarsened by this factor and upscale; >1 trades a tiny amount
     # of accuracy for a large speedup. 1 keeps the full-resolution motion field.
     motion_grid_step: int = 2
+    # Optional cap on the motion-interpolation grid's longest edge (pixels). When
+    # set, it overrides motion_grid_step where that would be finer, keeping
+    # densification near constant-time regardless of product size.
+    motion_grid_max: int | None = None
+    # Use the parallel kd-tree inverse-distance interpolation (numerically
+    # identical to pysteps) and the cv2.remap semi-Lagrangian extrapolation from
+    # radar_server.forecast_fast. Both are portable CPU speedups.
+    fast_idw: bool = True
+    fast_warp: bool = True
 
     def __post_init__(self) -> None:
         if self.field_dir is None:
