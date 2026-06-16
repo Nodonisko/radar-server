@@ -223,6 +223,7 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
     assert captured["fast_idw"] == forecast.fast_idw
     assert captured["fast_warp"] == forecast.fast_warp
     assert captured["fast_motion"] == forecast.fast_motion
+    assert captured["warp_grid_step"] == forecast.warp_grid_step
 
 
 def test_coarse_motion_matches_full_resolution() -> None:
@@ -342,6 +343,31 @@ def test_fast_warp_matches_pysteps() -> None:
     mask = np.isfinite(reference) & np.isfinite(fast)
     rmse = float(np.sqrt(np.mean((reference[mask] - fast[mask]) ** 2)))
     assert rmse < 0.5, f"cv2 warp diverged from scipy (RMSE {rmse:.3f})"
+
+
+def test_fast_warp_coarse_grid_matches_full_resolution() -> None:
+    """Coarsening the warp's trajectory integration stays close to full resolution."""
+
+    pytest.importorskip("cv2")
+    from radar_server import forecast_fast
+
+    rng = np.random.default_rng(4)
+    height, width = 160, 200
+    precip = rng.normal(20.0, 5.0, size=(height, width)).astype(np.float32)
+    # A smoothly varying (rotational) velocity field, like a real motion field.
+    yy, xx = np.mgrid[0:height, 0:width]
+    u = (0.02 * (yy - height / 2)).astype(np.float32)
+    v = (-0.02 * (xx - width / 2)).astype(np.float32)
+    velocity = np.stack([u, v])
+    lead_steps = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+    full = forecast_fast.extrapolate(precip, velocity, lead_steps, grid_step=1)
+    coarse = forecast_fast.extrapolate(precip, velocity, lead_steps, grid_step=2)
+
+    assert coarse.shape == full.shape == (len(lead_steps), height, width)
+    mask = np.isfinite(full) & np.isfinite(coarse)
+    rmse = float(np.sqrt(np.mean((full[mask] - coarse[mask]) ** 2)))
+    assert rmse < 0.5, f"coarse-grid warp diverged from full resolution (RMSE {rmse:.3f})"
 
 
 def test_coarse_motion_falls_back_on_tiny_grid(monkeypatch) -> None:  # noqa: ANN001

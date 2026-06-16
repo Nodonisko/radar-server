@@ -61,6 +61,7 @@ def generate_for_task(task: ForecastGenTask) -> dict[int, RadarField]:
         fast_idw=forecast.fast_idw,
         fast_warp=forecast.fast_warp,
         fast_motion=forecast.fast_motion,
+        warp_grid_step=forecast.warp_grid_step,
         forecast_id=forecast.id,
     )
 
@@ -76,6 +77,7 @@ def generate_forecast_fields(
     fast_idw: bool = False,
     fast_warp: bool = False,
     fast_motion: bool = False,
+    warp_grid_step: int = 1,
     forecast_id: str | None = None,
 ) -> dict[int, RadarField]:
     """Extrapolate ``fields`` (chronological, oldest first) ``minutes`` ahead.
@@ -96,7 +98,9 @@ def generate_forecast_fields(
       interpolation in :mod:`radar_server.forecast_fast` (numerically identical
       to pysteps).
     * ``fast_warp`` uses the ``cv2.remap`` semi-Lagrangian extrapolation in
-      :mod:`radar_server.forecast_fast` instead of scipy.
+      :mod:`radar_server.forecast_fast` instead of scipy. ``warp_grid_step`` > 1
+      integrates that warp's displacement trajectory on a coarsened grid (only
+      used when ``fast_warp`` is on).
     """
 
     if len(fields) < 2:
@@ -141,7 +145,9 @@ def generate_forecast_fields(
     lead_steps = [minute / dt for minute in unique_minutes]
 
     step_start = time.perf_counter()
-    forecast_stack = _extrapolate(fields[-1].values, velocity, lead_steps, fast=fast_warp)
+    forecast_stack = _extrapolate(
+        fields[-1].values, velocity, lead_steps, fast=fast_warp, grid_step=warp_grid_step
+    )
     extrapolate_time = time.perf_counter() - step_start
 
     _log_generation_performance(
@@ -323,7 +329,7 @@ def _coarse_lucaskanade_velocity(  # noqa: ANN202
     return _upscale_velocity(coarse, width, height)
 
 
-def _extrapolate(precip, velocity, lead_steps, *, fast: bool):  # noqa: ANN001, ANN202
+def _extrapolate(precip, velocity, lead_steps, *, fast: bool, grid_step: int = 1):  # noqa: ANN001, ANN202
     if fast:
         from . import forecast_fast
 
@@ -332,6 +338,7 @@ def _extrapolate(precip, velocity, lead_steps, *, fast: bool):  # noqa: ANN001, 
             velocity,
             lead_steps,
             allow_nonfinite_values=bool(np.any(~np.isfinite(precip))),
+            grid_step=grid_step,
         )
     return _extrapolation_method()(precip, velocity, lead_steps)
 
