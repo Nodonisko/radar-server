@@ -60,6 +60,7 @@ def generate_for_task(task: ForecastGenTask) -> dict[int, RadarField]:
         motion_grid_max=forecast.motion_grid_max,
         fast_idw=forecast.fast_idw,
         fast_warp=forecast.fast_warp,
+        fast_motion=forecast.fast_motion,
         forecast_id=forecast.id,
     )
 
@@ -74,6 +75,7 @@ def generate_forecast_fields(
     motion_grid_max: int | None = None,
     fast_idw: bool = False,
     fast_warp: bool = False,
+    fast_motion: bool = False,
     forecast_id: str | None = None,
 ) -> dict[int, RadarField]:
     """Extrapolate ``fields`` (chronological, oldest first) ``minutes`` ahead.
@@ -88,8 +90,11 @@ def generate_forecast_fields(
       on its longest edge (overrides ``motion_grid_step`` when it implies a
       coarser grid), making the densification near constant-time across product
       sizes.
-    * ``fast_idw`` uses the parallel kd-tree inverse-distance interpolation in
+    * ``fast_motion`` uses the MaskedArray-free sparse Lucas-Kanade path in
       :mod:`radar_server.forecast_fast` (numerically identical to pysteps).
+    * ``fast_idw`` uses the parallel kd-tree + numba inverse-distance
+      interpolation in :mod:`radar_server.forecast_fast` (numerically identical
+      to pysteps).
     * ``fast_warp`` uses the ``cv2.remap`` semi-Lagrangian extrapolation in
       :mod:`radar_server.forecast_fast` instead of scipy.
     """
@@ -118,17 +123,18 @@ def generate_forecast_fields(
         )
         return _transparent_forecast_fields(latest, unique_minutes)
 
-    # Keep NaN as a radar mask. Motion methods accept masked arrays, and
-    # extrapolation allows non-finite values for no-observation pixels.
-    motion_input = np.ma.masked_invalid(np.stack([field.values for field in fields]))
+    # Keep NaN as a radar mask: no-observation pixels. The fast path works on
+    # this plain stack directly; the pysteps path wraps it in a MaskedArray.
+    motion_stack = np.stack([field.values for field in fields])
 
     step_start = time.perf_counter()
     velocity = _compute_motion(
         method,
-        motion_input,
+        motion_stack,
         grid_step=motion_grid_step,
         grid_max=motion_grid_max,
         fast_idw=fast_idw,
+        fast_motion=fast_motion,
     )
     motion_time = time.perf_counter() - step_start
 
@@ -237,42 +243,55 @@ _DECL_SCALE = 20
 
 def _compute_motion(  # noqa: ANN202
     method: str,
-    motion_input,  # noqa: ANN001
+    motion_stack,  # noqa: ANN001
     *,
     grid_step: int,
     grid_max: int | None = None,
     fast_idw: bool = False,
+    fast_motion: bool = False,
 ):
     oflow_method = _motion_method(method)
-    if method == "lucaskanade" and (grid_step > 1 or grid_max is not None):
+    if method == "lucaskanade" and (fast_motion or grid_step > 1 or grid_max is not None):
         velocity = _coarse_lucaskanade_velocity(
-            oflow_method, motion_input, grid_step=grid_step, grid_max=grid_max, fast_idw=fast_idw
+            oflow_method,
+            motion_stack,
+            grid_step=grid_step,
+            grid_max=grid_max,
+            fast_idw=fast_idw,
+            fast_motion=fast_motion,
         )
         if velocity is not None:
             return velocity
+    # Full-resolution pysteps path consumes a MaskedArray (NaN -> no-data mask).
+    motion_input = np.ma.masked_invalid(motion_stack)
     kwargs = {"verbose": False} if _accepts_keyword(oflow_method, "verbose") else {}
     return oflow_method(motion_input, **kwargs)
 
 
 def _coarse_lucaskanade_velocity(  # noqa: ANN202
     oflow_method,  # noqa: ANN001
-    motion_input,  # noqa: ANN001
+    motion_stack,  # noqa: ANN001
     *,
     grid_step: int,
     grid_max: int | None = None,
     fast_idw: bool = False,
+    fast_motion: bool = False,
 ):
-    """Lucas-Kanade motion densified on a coarsened grid, then upscaled.
+    """Lucas-Kanade motion densified on a (optionally coarsened) grid, upscaled.
 
     Tracking and feature detection are cheap; the cost is interpolating the
     sparse vectors onto every pixel. The motion field is smooth, so we run that
     interpolation on a coarsened grid and bilinearly upscale. ``grid_max`` caps
     the longest grid edge so densification cost stays bounded on huge products.
 
+    ``fast_motion`` swaps pysteps' MaskedArray-based sparse extraction for the
+    plain-array path in :mod:`radar_server.forecast_fast` (same vectors, far
+    less ``numpy.ma`` overhead).
+
     Returns ``None`` to signal the caller to fall back to the full-grid method
     when the grid is too small to coarsen.
     """
-    height, width = motion_input.shape[1:]
+    height, width = motion_stack.shape[1:]
     step = max(1, grid_step)
     if grid_max is not None and grid_max > 0:
         step = max(step, int(np.ceil(max(height, width) / grid_max)))
@@ -281,8 +300,14 @@ def _coarse_lucaskanade_velocity(  # noqa: ANN202
     if xgrid.size < 2 or ygrid.size < 2:
         return None
 
-    kwargs = {"verbose": False} if _accepts_keyword(oflow_method, "verbose") else {}
-    xy, uv = oflow_method(motion_input, dense=False, **kwargs)
+    if fast_motion:
+        from . import forecast_fast
+
+        xy, uv = forecast_fast.lk_sparse_vectors(motion_stack)
+    else:
+        motion_input = np.ma.masked_invalid(motion_stack)
+        kwargs = {"verbose": False} if _accepts_keyword(oflow_method, "verbose") else {}
+        xy, uv = oflow_method(motion_input, dense=False, **kwargs)
     if len(xy) == 0:
         return np.zeros((2, height, width), dtype=np.float32)
 

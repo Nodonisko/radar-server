@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -68,6 +69,27 @@ def test_generate_forecast_fields_masks_nan_and_uses_lead_steps(monkeypatch) -> 
     assert generated[20].timestamp == timestamp + timedelta(minutes=27)
     assert generated[10].transform == fields[-1].transform
     assert generated[10].crs == WEB_MERCATOR
+
+
+def test_generate_forecast_fields_logs_forecast_id(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ANN001
+    captured: dict = {}
+    _patch_pysteps(monkeypatch, captured, lead_values=(10.0, 20.0))
+    caplog.set_level(logging.INFO)
+
+    t0 = datetime(2026, 6, 5, 21, 0)
+    t1 = t0 + timedelta(minutes=5)
+    fields = [_field(np.full((4, 4), 30.0), t0), _field(np.full((4, 4), 35.0), t1)]
+    generate_forecast_fields(fields, minutes=(10, 20), forecast_id="cz_forecast")
+
+    generation_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "radar_server.forecast_generation" and record.levelno == logging.INFO
+    ]
+    assert len(generation_logs) == 1
+    assert generation_logs[0].startswith("Generated cz_forecast forecast fields in ")
+    assert "motion=" in generation_logs[0]
+    assert "extrapolate=" in generation_logs[0]
 
 
 def test_generate_forecast_fields_applies_floor_level(monkeypatch) -> None:  # noqa: ANN001
@@ -200,6 +222,7 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
     assert captured["motion_grid_max"] == forecast.motion_grid_max
     assert captured["fast_idw"] == forecast.fast_idw
     assert captured["fast_warp"] == forecast.fast_warp
+    assert captured["fast_motion"] == forecast.fast_motion
 
 
 def test_coarse_motion_matches_full_resolution() -> None:
@@ -252,6 +275,48 @@ def test_fast_idw_matches_pysteps() -> None:
     assert np.allclose(fast, reference, atol=1e-6)
 
 
+def test_fast_motion_matches_pysteps() -> None:
+    """The MaskedArray-free sparse Lucas-Kanade path must match pysteps exactly."""
+
+    pytest.importorskip("pysteps")
+    pytest.importorskip("cv2")
+    from radar_server import forecast_fast
+    from radar_server.forecast_generation import _DECL_SCALE, _coarse_motion_tools, _motion_method
+
+    rng = np.random.default_rng(3)
+    height, width = 110, 130
+    yy, xx = np.mgrid[0:height, 0:width]
+    frames = []
+    for i in range(3):
+        field = 45.0 * np.exp(-(((xx - (40 + 5 * i)) ** 2 + (yy - (55 + 4 * i)) ** 2) / (2 * 10.0**2)))
+        field += 25.0 * np.exp(-(((xx - (90 - 4 * i)) ** 2 + (yy - (30 + 2 * i)) ** 2) / (2 * 7.0**2)))
+        field = field + rng.normal(0.0, 1.0, size=(height, width))
+        # No-data border so the masked path is exercised (mostly-no-data radar).
+        field[:8, :] = np.nan
+        field[-8:, :] = np.nan
+        field[:, :8] = np.nan
+        field[:, -8:] = np.nan
+        frames.append(field.astype(np.float32))
+    stack = np.stack(frames)
+
+    oflow = _motion_method("lucaskanade")
+    xy_ref, uv_ref = oflow(np.ma.masked_invalid(stack), dense=False, verbose=False)
+    xy_fast, uv_fast = forecast_fast.lk_sparse_vectors(stack)
+
+    assert xy_fast.shape == xy_ref.shape, "fast path found a different number of vectors"
+
+    idwinterp2d, decluster = _coarse_motion_tools()
+    xgrid = np.arange(width)
+    ygrid = np.arange(height)
+
+    def densify(xy: np.ndarray, uv: np.ndarray) -> np.ndarray:
+        xy, uv = decluster(xy, uv, _DECL_SCALE, 1, False)
+        return np.asarray(idwinterp2d(xy, uv, xgrid, ygrid), dtype=np.float64)
+
+    rmse = float(np.sqrt(np.mean((densify(xy_ref, uv_ref) - densify(xy_fast, uv_fast)) ** 2)))
+    assert rmse < 1e-3, f"fast motion diverged from pysteps (dense velocity RMSE {rmse:.4f})"
+
+
 def test_fast_warp_matches_pysteps() -> None:
     """The cv2.remap semi-Lagrangian warp must closely match scipy/pysteps."""
 
@@ -293,7 +358,7 @@ def test_coarse_motion_falls_back_on_tiny_grid(monkeypatch) -> None:  # noqa: AN
 
     monkeypatch.setattr(forecast_generation, "_motion_method", fake_motion_method)
 
-    motion_input = np.ma.masked_invalid(np.zeros((3, 2, 2), dtype=np.float32))
-    forecast_generation._compute_motion("lucaskanade", motion_input, grid_step=2)
+    motion_stack = np.zeros((3, 2, 2), dtype=np.float32)
+    forecast_generation._compute_motion("lucaskanade", motion_stack, grid_step=2)
 
     assert calls["dense"] is True

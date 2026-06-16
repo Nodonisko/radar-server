@@ -329,6 +329,11 @@ class ForecastProduct:
     # radar_server.forecast_fast. Both are portable CPU speedups.
     fast_idw: bool = True
     fast_warp: bool = True
+    # Use the MaskedArray-free sparse Lucas-Kanade path (plain arrays + cv2 +
+    # numba IDW) from radar_server.forecast_fast. Numerically identical to
+    # pysteps but avoids the numpy.ma overhead that dominates on mostly-no-data
+    # radar fields.
+    fast_motion: bool = True
 
     def __post_init__(self) -> None:
         if self.field_dir is None:

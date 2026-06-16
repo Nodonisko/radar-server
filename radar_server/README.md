@@ -141,14 +141,30 @@ MQTT / polling (main thread, networking only)
   halves generation time versus full-resolution interpolation (set to 1 to
   disable). `motion_grid_max` optionally caps the motion grid's longest edge so
   densification stays near constant-time on very large products.
-- Two further portable CPU optimizations are on by default
-  (`ForecastProduct.fast_idw` / `fast_warp`, implemented in
-  `radar_server/forecast_fast.py`): a parallel kd-tree inverse-distance
-  interpolation (numerically identical to pysteps) and a `cv2.remap`
-  semi-Lagrangian extrapolation replacing `scipy.ndimage.map_coordinates`.
-  Together they cut generation time ~2.8x on the PL and Norway products (e.g.
-  Norway forecast-only ~8.8s → ~3.2s) for a <0.05 dBZ RMSE difference versus the
-  stock pysteps path. Disable either via config or the benchmark flags.
+- Three further portable CPU optimizations are on by default
+  (`ForecastProduct.fast_motion` / `fast_idw` / `fast_warp`, implemented in
+  `radar_server/forecast_fast.py`):
+  - `fast_motion`: a `MaskedArray`-free sparse Lucas-Kanade path. Radar fields
+    are mostly no-data, so pysteps' `numpy.ma` mask bookkeeping (`.filled()`,
+    masked `__setitem__`, masked reductions) dominates feature detection and
+    tracking — far more than the OpenCV work itself. This path runs the same
+    morph-opening → Shi-Tomasi → `calcOpticalFlowPyrLK` → outlier-removal
+    pipeline on plain `float32` arrays with the no-data mask derived once. It is
+    numerically identical to pysteps (byte-identical uint8 detection/tracking
+    images) and ~2–3x faster on the sparse step.
+  - `fast_idw`: a parallel kd-tree (`workers=-1`) inverse-distance interpolation
+    whose weighting + weighted sum run in a single fused `numba` parallel kernel
+    (no large gather/product temporaries). Numerically identical to pysteps
+    (~6e-15) and ~10x faster on the densify step.
+  - `fast_warp`: a `cv2.remap` semi-Lagrangian extrapolation replacing
+    `scipy.ndimage.map_coordinates`.
+  Combined with `motion_grid_step`, these cut forecast-only generation roughly
+  in half again versus the previous (`fast_idw`+`fast_warp`) path — Norway
+  ~3.07s → ~1.37s and Poland ~0.49s → ~0.22s — with no accuracy cost
+  (`fast_motion`/`fast_idw` are bit-for-bit equal to pysteps; only `fast_warp`'s
+  bilinear sampling differs, at <0.05 dBZ RMSE). `fast_idw`/`fast_motion`
+  require `numba` (see `requirements.txt`); the IDW path falls back to numpy if
+  numba is unavailable. Disable any of them via config or the benchmark flags.
 - Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
   (atomic clear-and-replace, latest issue only); rendering reads them like
   ordinary inputs, so it is idempotent and restart-durable.
