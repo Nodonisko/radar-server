@@ -22,6 +22,7 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 5
 DEFAULT_READ_TIMEOUT_SECONDS = 20
 DEFAULT_RETRY_DELAY_SECONDS = 5.0
 MAX_RETRY_DELAY_SECONDS = 300.0
+R2_UPLOAD_WORKER_COUNT = 6
 UPLOAD_STATE_FILENAME = ".r2_upload_state.json"
 PNG_SUFFIX = ".png"
 
@@ -102,6 +103,7 @@ class R2Uploader:
         self.config = config
         self.output_dir = output_dir
         self._client = client
+        self._client_lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -146,7 +148,9 @@ class R2Uploader:
 
     def _s3(self) -> S3Client:
         if self._client is None:
-            self._client = _build_s3_client(self.config)
+            with self._client_lock:
+                if self._client is None:
+                    self._client = _build_s3_client(self.config)
         return self._client
 
 
@@ -250,9 +254,13 @@ class R2UploadWorker(threading.Thread):
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         max_retry_delay_seconds: float = MAX_RETRY_DELAY_SECONDS,
         state: R2UploadState | None = None,
+        worker_count: int = R2_UPLOAD_WORKER_COUNT,
     ) -> None:
-        super().__init__(name="r2-upload-worker", daemon=True)
+        if worker_count < 1:
+            raise ValueError("worker_count must be at least 1")
+        super().__init__(name="r2-upload-worker-supervisor", daemon=True)
         self.uploader = uploader
+        self.worker_count = worker_count
         self._queue: queue.PriorityQueue[_QueuedUpload] = queue.PriorityQueue()
         self._poll_interval = poll_interval
         self._retry_delay_seconds = retry_delay_seconds
@@ -262,6 +270,7 @@ class R2UploadWorker(threading.Thread):
         self._pending: set[Path] = set()
         self._pending_lock = threading.Lock()
         self._sequence = count()
+        self._worker_threads: tuple[threading.Thread, ...] = ()
 
     @classmethod
     def from_env(cls, *, output_dir: Path = OUTPUT_DIR) -> "R2UploadWorker":
@@ -304,6 +313,20 @@ class R2UploadWorker(threading.Thread):
         return enqueued
 
     def run(self) -> None:
+        self._worker_threads = tuple(
+            threading.Thread(
+                target=self._run_upload_loop,
+                name=f"r2-upload-worker-{index + 1}",
+                daemon=True,
+            )
+            for index in range(self.worker_count)
+        )
+        for worker in self._worker_threads:
+            worker.start()
+        for worker in self._worker_threads:
+            worker.join()
+
+    def _run_upload_loop(self) -> None:
         while not self._stop_event.is_set() or not self._queue.empty():
             self.process_one(timeout=self._poll_interval)
 

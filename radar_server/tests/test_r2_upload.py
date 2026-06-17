@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,35 @@ class FlakyS3Client(FakeS3Client):
             self.failures_remaining -= 1
             raise RuntimeError("temporary R2 outage")
         super().upload_fileobj(file_obj, bucket, key, ExtraArgs=ExtraArgs)
+
+
+class BlockingS3Client(FakeS3Client):
+    def __init__(self, *, expected_active: int) -> None:
+        super().__init__()
+        self.expected_active = expected_active
+        self.active = 0
+        self.max_active = 0
+        self.all_active = threading.Event()
+        self._lock = threading.Lock()
+
+    def upload_fileobj(self, file_obj, bucket, key, ExtraArgs=None):  # noqa: ANN001, ANN002, N803
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            if self.active >= self.expected_active:
+                self.all_active.set()
+        self.all_active.wait(timeout=0.25)
+        body = file_obj.read()
+        with self._lock:
+            self.uploads.append(
+                {
+                    "body": body,
+                    "bucket": bucket,
+                    "key": key,
+                    "extra": ExtraArgs,
+                }
+            )
+            self.active -= 1
 
 
 def _config(*, prefix: str = "") -> R2UploadConfig:
@@ -140,6 +170,46 @@ def test_r2_upload_reconciliation_skips_marked_outputs(tmp_path: Path) -> None:
     assert worker.process_one() is True
 
     assert client.uploads[0]["key"] == "cz/missing_overlay.png"
+
+
+def test_r2_upload_worker_uploads_with_multiple_threads(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    paths = [output_dir / "cz" / f"frame_{index}_overlay.png" for index in range(3)]
+    paths[0].parent.mkdir(parents=True)
+    for path in paths:
+        path.write_bytes(path.name.encode())
+    client = BlockingS3Client(expected_active=3)
+    worker = R2UploadWorker(
+        R2Uploader(_config(), output_dir=output_dir, client=client),
+        poll_interval=0.01,
+        worker_count=3,
+    )
+
+    worker.start()
+    try:
+        for path in paths:
+            worker.enqueue(path)
+
+        assert client.all_active.wait(timeout=2)
+        assert worker.drain(timeout=2)
+    finally:
+        worker.stop()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert client.max_active == 3
+    assert sorted(upload["key"] for upload in client.uploads) == [
+        "cz/frame_0_overlay.png",
+        "cz/frame_1_overlay.png",
+        "cz/frame_2_overlay.png",
+    ]
+
+
+def test_r2_upload_worker_rejects_empty_worker_pool(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+
+    with pytest.raises(ValueError, match="worker_count"):
+        R2UploadWorker(R2Uploader(_config(), output_dir=output_dir, client=FakeS3Client()), worker_count=0)
 
 
 def test_r2_env_bool_rejects_typos(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
