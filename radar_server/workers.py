@@ -44,7 +44,7 @@ from .rendering.pipeline import OutputReadyCallback
 LOGGER = logging.getLogger(__name__)
 
 RENDER_WORKER_COUNT = 4
-FORECAST_GEN_WORKER_COUNT = 4
+FORECAST_GEN_WORKER_COUNT = 8
 
 
 class IndexHolder:
