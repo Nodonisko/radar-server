@@ -182,7 +182,7 @@ def test_ingest_to_render_flow_end_to_end(tmp_path: Path) -> None:
 
     assert runtime.download_worker.process_one() is True
     assert not runtime.render_queue.is_idle()
-    assert runtime.render_worker.process_one() is True
+    assert runtime.render_workers[0].process_one() is True
 
     assert calls == ["radar_test_20260605_2105"]
     assert runtime.render_queue.is_idle()
@@ -297,7 +297,7 @@ def test_forecast_generation_only_dispatches_when_render_lane_idle(tmp_path: Pat
     assert runtime.dispatch_forecast_generation() == 0
     assert generated == []
 
-    while runtime.render_worker.process_one():
+    while runtime.render_workers[0].process_one():
         pass
     assert runtime.render_queue.is_idle()
 
@@ -320,7 +320,7 @@ def test_run_forever_starts_and_shuts_down_cleanly(tmp_path: Path) -> None:
     runtime.run_forever(sleep_seconds=0.01)
 
     assert not runtime.download_worker.is_alive()
-    assert not runtime.render_worker.is_alive()
+    assert not any(worker.is_alive() for worker in runtime.render_workers)
 
 
 def test_run_forever_shuts_down_on_interrupt(tmp_path: Path) -> None:
@@ -337,7 +337,7 @@ def test_run_forever_shuts_down_on_interrupt(tmp_path: Path) -> None:
         runtime.run_forever(sleep_seconds=0.01)
 
     assert not runtime.download_worker.is_alive()
-    assert not runtime.render_worker.is_alive()
+    assert not any(worker.is_alive() for worker in runtime.render_workers)
 
 
 def test_startup_enqueues_full_poll_for_all_inputs(tmp_path: Path) -> None:

@@ -6,9 +6,9 @@ Roles (see runtime.py for wiring):
 - ``DownloadWorker`` (1 thread) drains the ingest queue: it downloads files,
   refreshes the shared input index, enqueues observed render tasks by product
   priority, and records the latest wanted forecast generation per product.
-- ``RenderWorker`` (1 thread) drains the render priority queue sequentially so
-  each render (oxipng-heavy) gets the full machine; strict numeric priority
-  means observed frames always beat forecast frames.
+- ``RenderWorker`` threads drain the render priority queue in parallel (see
+  ``RENDER_WORKER_COUNT``); strict numeric priority means observed frames
+  always beat forecast frames.
 - ``ForecastGenPool`` runs pysteps motion/extrapolation up to N wide; it is
   dispatched by the runtime only when the render lane is idle, writes the
   generated fields to the on-disk store, then enqueues forecast render tasks.
@@ -42,6 +42,9 @@ from .rendering.forecast import render_forecast_field
 from .rendering.pipeline import OutputReadyCallback
 
 LOGGER = logging.getLogger(__name__)
+
+RENDER_WORKER_COUNT = 3
+FORECAST_GEN_WORKER_COUNT = 3
 
 
 class IndexHolder:
@@ -148,7 +151,7 @@ class _QueueWorker(threading.Thread):
 
 
 class RenderWorker(_QueueWorker):
-    """Single sequential render lane ordered by numeric priority."""
+    """Render lane worker ordered by numeric priority."""
 
     def __init__(
         self,
@@ -157,8 +160,9 @@ class RenderWorker(_QueueWorker):
         want_board: ForecastWantBoard | None = None,
         on_output_ready: OutputReadyCallback | None = None,
         poll_interval: float = 0.5,
+        name: str = "render-worker",
     ) -> None:
-        super().__init__(render_queue, name="render-worker", poll_interval=poll_interval)
+        super().__init__(render_queue, name=name, poll_interval=poll_interval)
         self._want_board = want_board
         self._on_output_ready = on_output_ready
 
@@ -377,7 +381,7 @@ class ForecastGenPool:
         self,
         render_queue: PriorityWorkQueue,
         *,
-        max_workers: int = 2,
+        max_workers: int = FORECAST_GEN_WORKER_COUNT,
         generate_func: GenerateFunc | None = None,
         executor=None,  # noqa: ANN001 - test seam (inline executor)
     ) -> None:

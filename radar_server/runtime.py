@@ -7,11 +7,12 @@ Thread layout:
   forecast generation pool on the render lane being idle, runs pruning.
 - download worker (1 thread): downloads files, refreshes the input index,
   enqueues observed render tasks and forecast wants.
-- render worker (1 thread): drains the render priority queue sequentially;
-  lower priority numbers render first (cz before other countries before the
-  composite before any forecast frame).
-- forecast generation pool (2 threads): pysteps motion/extrapolation, writes
-  fields to disk, then enqueues lowest-priority forecast render tasks.
+- render workers (``RENDER_WORKER_COUNT`` threads): drain the render priority
+  queue in parallel; lower priority numbers render first (cz before other
+  countries before the composite before any forecast frame).
+- forecast generation pool (``FORECAST_GEN_WORKER_COUNT`` threads): pysteps
+  motion/extrapolation, writes fields to disk, then enqueues lowest-priority
+  forecast render tasks.
 
 The queues are in-memory; on startup :meth:`RadarRuntime.reconcile_startup`
 rebuilds pending work from the filesystem (idempotent outputs), so shutdown
@@ -37,9 +38,11 @@ from .rendering.pipeline import OutputReadyCallback
 from .scheduler import RadarScheduler, default_limit_per_input
 from .workers import (
     DownloadWorker,
+    FORECAST_GEN_WORKER_COUNT,
     ForecastGenPool,
     ForecastWantBoard,
     IndexHolder,
+    RENDER_WORKER_COUNT,
     RenderWorker,
     build_forecast_gen_task,
     enqueue_observed_render_jobs,
@@ -84,8 +87,16 @@ class RadarRuntime:
             want_board=self.want_board,
             record_poll_result=self._record_poll_result,
         )
-        self.render_worker = RenderWorker(self.render_queue, want_board=self.want_board, on_output_ready=output_ready)
-        self.forecast_pool = ForecastGenPool(self.render_queue)
+        self.render_workers = tuple(
+            RenderWorker(
+                self.render_queue,
+                want_board=self.want_board,
+                on_output_ready=output_ready,
+                name=f"render-worker-{index}",
+            )
+            for index in range(RENDER_WORKER_COUNT)
+        )
+        self.forecast_pool = ForecastGenPool(self.render_queue, max_workers=FORECAST_GEN_WORKER_COUNT)
         self.mqtt = MqttWatcher(inputs=config.inputs, on_notification=self._on_mqtt_notification)
         self._stop_requested = Event()
         self._started = False
@@ -184,7 +195,8 @@ class RadarRuntime:
             self.upload_worker.start()
             self.upload_worker.enqueue_pending_outputs()
         self.download_worker.start()
-        self.render_worker.start()
+        for worker in self.render_workers:
+            worker.start()
         if self.mqtt.default_policy() is not None:
             self.mqtt.start()
         else:
@@ -249,12 +261,15 @@ class RadarRuntime:
         self._stop_requested.set()
         self.mqtt.stop()
         self.download_worker.stop()
-        self.render_worker.stop()
+        for worker in self.render_workers:
+            worker.stop()
         if self.download_worker.is_alive():
             self.download_worker.join(timeout=join_timeout_seconds)
-        if self.render_worker.is_alive():
-            LOGGER.info("Waiting for current render to finish before stopping R2 uploads")
-            self.render_worker.join()
+        alive_render_workers = [worker for worker in self.render_workers if worker.is_alive()]
+        if alive_render_workers:
+            LOGGER.info("Waiting for current renders to finish before stopping R2 uploads")
+            for worker in alive_render_workers:
+                worker.join()
         if self.upload_worker.enabled and not self.upload_worker.drain(timeout=join_timeout_seconds):
             LOGGER.warning(
                 "R2 upload drain timed out with %d pending PNGs; remaining files will retry on next start",
