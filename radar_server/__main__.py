@@ -102,6 +102,9 @@ def main() -> int:
 
 
 def _with_optimize(config: RadarServerConfig, *, optimize: bool) -> RadarServerConfig:
+    if optimize:
+        return config
+
     products = tuple(
         replace(product, render=replace(product.render, optimize=optimize))
         for product in config.products

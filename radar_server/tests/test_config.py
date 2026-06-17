@@ -12,6 +12,7 @@ from radar_server.config import (
     cz_forecast,
     cz_product,
 )
+from radar_server.__main__ import _with_optimize
 
 
 def test_forecast_product_reuses_parent_settings() -> None:
@@ -55,6 +56,23 @@ def test_config_wires_every_product_to_a_forecast() -> None:
     assert parent_ids == {product.id for product in CONFIG.products}
     assert all(forecast.history_frames == 3 for forecast in FORECAST_PRODUCTS)
     assert all(forecast.method == "lucaskanade" for forecast in FORECAST_PRODUCTS)
+
+
+def test_oxipng_disabled_for_selected_country_products() -> None:
+    disabled_products = {product.id for product in PRODUCTS if not product.render.optimize}
+    assert disabled_products == {"fi", "no", "se"}
+
+    disabled_forecasts = {forecast.id for forecast in FORECAST_PRODUCTS if not forecast.optimize}
+    assert disabled_forecasts == {"fi_forecast", "no_forecast", "se_forecast"}
+
+
+def test_cli_optimize_default_preserves_product_settings() -> None:
+    assert _with_optimize(CONFIG, optimize=True) is CONFIG
+
+    config = _with_optimize(CONFIG, optimize=False)
+
+    assert all(not product.render.optimize for product in config.products)
+    assert all(not forecast.optimize for forecast in config.forecasts)
 
 
 def test_configured_product_bounds_use_at_most_two_decimals() -> None:

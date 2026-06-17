@@ -173,6 +173,9 @@ class RenderProfile:
     optimize: bool = True
 
 
+NO_OXIPNG_RENDER = RenderProfile(optimize=False)
+
+
 @dataclass(frozen=True)
 class HttpDirectorySource:
     id: str
@@ -564,6 +567,7 @@ fi_product = ProductConfig(
     output_dir=OUTPUT_DIR / "fi",
     geo_bounds=FINLAND_BOUNDS,
     base_name=timestamped_base("radar_fi"),
+    render=NO_OXIPNG_RENDER,
     priority=10,
 )
 
@@ -704,6 +708,7 @@ no_product = ProductConfig(
     output_dir=OUTPUT_DIR / "no",
     geo_bounds=NORWAY_BOUNDS,
     base_name=timestamped_base("radar_no"),
+    render=NO_OXIPNG_RENDER,
     priority=10,
 )
 
@@ -754,6 +759,7 @@ se_product = ProductConfig(
     output_dir=OUTPUT_DIR / "se",
     geo_bounds=SWEDEN_BOUNDS,
     base_name=timestamped_base("radar_se"),
+    render=NO_OXIPNG_RENDER,
     priority=10,
 )
 
