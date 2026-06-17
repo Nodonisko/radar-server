@@ -22,6 +22,7 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 5
 DEFAULT_READ_TIMEOUT_SECONDS = 20
 DEFAULT_RETRY_DELAY_SECONDS = 5.0
 MAX_RETRY_DELAY_SECONDS = 300.0
+DEFAULT_MAX_POOL_CONNECTIONS = 10
 R2_UPLOAD_WORKER_COUNT = 6
 UPLOAD_STATE_FILENAME = ".r2_upload_state.json"
 PNG_SUFFIX = ".png"
@@ -171,6 +172,7 @@ def _build_s3_client(config: R2UploadConfig) -> S3Client:
             connect_timeout=DEFAULT_CONNECT_TIMEOUT_SECONDS,
             read_timeout=DEFAULT_READ_TIMEOUT_SECONDS,
             retries={"max_attempts": 3, "mode": "standard"},
+            max_pool_connections=max(DEFAULT_MAX_POOL_CONNECTIONS, R2_UPLOAD_WORKER_COUNT),
         ),
     )
 
