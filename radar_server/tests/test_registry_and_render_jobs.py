@@ -6,6 +6,7 @@ from pathlib import Path
 
 from radar_server.config import (
     GeoBounds,
+    GeoCenter,
     ProductConfig,
     RenderPipeline,
     RenderProfile,
@@ -38,6 +39,8 @@ def _product(tmp_path: Path, *, inputs, geo_bounds=None, render=None) -> Product
         inputs=tuple(inputs),
         output_dir=tmp_path / "out",
         geo_bounds=geo_bounds or GeoBounds(0, 0, 0, 0),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=260,
         base_name=timestamped_base("radar_test"),
         render=render or RenderProfile(),
     )

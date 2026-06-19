@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from radar_server.config import ForecastProduct, GeoBounds, ProductConfig, RetentionPolicy, cz_maxz, timestamped_base
+from radar_server.config import ForecastProduct, GeoBounds, GeoCenter, ProductConfig, RetentionPolicy, cz_maxz, timestamped_base
 from radar_server.pruning import prune_input_files, prune_product_outputs
 
 
@@ -15,6 +15,8 @@ def _product(tmp_path: Path, *, retention: RetentionPolicy | None = None) -> Pro
         inputs=(cz_maxz,),
         output_dir=tmp_path,
         geo_bounds=GeoBounds(0, 0, 0, 0),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=260,
         base_name=timestamped_base("radar_test"),
         retention=retention or RetentionPolicy(),
     )

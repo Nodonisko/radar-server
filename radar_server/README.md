@@ -147,9 +147,8 @@ MQTT / polling (main thread, networking only)
 ## Concurrency
 
 - All heavy work runs on worker threads; the main thread only orchestrates.
-- Numeric priority, lower renders first: `cz=0`, countries `10`,
-  `central_europe=20`, forecasts `1000+`. Observed frames always beat
-  forecast frames.
+- Numeric priority, lower renders first: `cz=0`, other active observed products
+  `10`, forecasts `1000+`. Observed frames always beat forecast frames.
 - Forecast work coalesces to the latest issue time; stale generations are
   discarded.
 - On startup the runtime reconciles pending work from the filesystem; on

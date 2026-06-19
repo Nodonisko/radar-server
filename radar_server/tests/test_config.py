@@ -42,7 +42,6 @@ def test_priorities_put_czechia_first_and_forecasts_last() -> None:
     priorities = {product.id: product.priority for product in PRODUCTS}
     assert priorities["cz"] == 0
     assert priorities["cz"] < min(p for pid, p in priorities.items() if pid != "cz")
-    assert priorities["central_europe"] == max(priorities.values())
 
     max_observed = max(priorities.values())
     assert all(forecast.priority > max_observed for forecast in FORECAST_PRODUCTS)

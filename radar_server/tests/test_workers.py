@@ -12,6 +12,7 @@ from radar_server import forecast_store
 from radar_server.config import (
     ForecastProduct,
     GeoBounds,
+    GeoCenter,
     ProductConfig,
     RenderPipeline,
     RenderProfile,
@@ -115,6 +116,8 @@ def _product(
         inputs=tuple(inputs or (cz_maxz,)),
         output_dir=tmp_path / "out" / product_id,
         geo_bounds=GeoBounds(west=11, south=48, east=19, north=51),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=260,
         base_name=timestamped_base(f"radar_{product_id}"),
         render=render,
         priority=priority,

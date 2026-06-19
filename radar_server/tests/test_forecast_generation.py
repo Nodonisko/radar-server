@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import radar_server.forecast_generation as forecast_generation
-from radar_server.config import ForecastProduct, GeoBounds, ProductConfig, cz_maxz, timestamped_base
+from radar_server.config import ForecastProduct, GeoBounds, GeoCenter, ProductConfig, cz_maxz, timestamped_base
 from radar_server.forecast_generation import generate_for_task, generate_forecast_fields
 from radar_server.queueing import ForecastGenTask, HistoryFrame
 from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField
@@ -173,6 +173,8 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
         inputs=(cz_maxz,),
         output_dir=tmp_path / "out",
         geo_bounds=GeoBounds(0, 0, 0, 0),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=260,
         base_name=timestamped_base("radar_test"),
     )
     forecast = ForecastProduct(

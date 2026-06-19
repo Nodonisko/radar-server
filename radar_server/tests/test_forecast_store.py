@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from radar_server import forecast_store
-from radar_server.config import ForecastProduct, GeoBounds, ProductConfig, cz_maxz, timestamped_base
+from radar_server.config import ForecastProduct, GeoBounds, GeoCenter, ProductConfig, cz_maxz, timestamped_base
 from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField
 
 ISSUE = datetime(2026, 6, 5, 21, 0)
@@ -19,6 +19,8 @@ def _parent(tmp_path: Path) -> ProductConfig:
         inputs=(cz_maxz,),
         output_dir=tmp_path / "out",
         geo_bounds=GeoBounds(0, 0, 0, 0),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=260,
         base_name=timestamped_base("radar_test"),
     )
 

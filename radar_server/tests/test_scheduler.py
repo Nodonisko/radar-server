@@ -6,6 +6,7 @@ from pathlib import Path
 
 from radar_server.config import (
     GeoBounds,
+    GeoCenter,
     RadarServerConfig,
     SmartPollingPolicy,
     ProductConfig,
@@ -37,6 +38,8 @@ def _product(tmp_path: Path, input_config) -> ProductConfig:
         inputs=(input_config,),
         output_dir=tmp_path / "out",
         geo_bounds=GeoBounds(0, 0, 0, 0),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=260,
         base_name=timestamped_base("radar_test"),
     )
 

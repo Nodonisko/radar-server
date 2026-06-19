@@ -80,6 +80,14 @@ class GeoBounds:
 
 
 @dataclass(frozen=True)
+class GeoCenter:
+    """Map center in EPSG:4326."""
+
+    latitude: float
+    longitude: float
+
+
+@dataclass(frozen=True)
 class SmartPollingPolicy:
     """Polling policy compatible with the old quick-polling scheduler behavior."""
 
@@ -186,11 +194,9 @@ NO_OXIPNG_RENDER = RenderProfile(optimize=False)
 NODATA_TINT_RENDER = RenderProfile(nodata_fill=Rgba(0, 0, 0, 0.15))
 
 # Surface Rainfall Intensity (precip rate, mm/h) render profile for the Italian
-# DPC ARCO composite. No-coverage cells are left fully transparent (no tint):
-# unlike OPERA, the DPC composite leaves ~half the domain as scattered no-data,
-# so a footprint tint reads as noisy range circles. To show the footprint
-# instead, swap in ``RenderProfile(palette=SRI_RATE, nodata_fill=Rgba(0,0,0,0.15))``.
-SRI_RENDER = RenderProfile(palette=SRI_RATE)
+# DPC ARCO composite. Tints no-coverage cells the same way OPERA products do,
+# while preserving the SRI rate palette.
+SRI_RENDER = RenderProfile(palette=SRI_RATE, nodata_fill=Rgba(0, 0, 0, 0.15))
 
 
 @dataclass(frozen=True)
@@ -337,6 +343,8 @@ class ProductConfig:
     inputs: tuple[InputConfig, ...]
     output_dir: Path
     geo_bounds: GeoBounds
+    center: GeoCenter
+    publish_delay_seconds: int
     base_name: BaseNameFactory
     render: RenderProfile = RenderProfile()
     priority: int = 100
@@ -521,6 +529,42 @@ SLOVENIA_BOUNDS = GeoBounds(west=12.33, south=44.70, east=17.56, north=47.58)
 UNITED_KINGDOM_BOUNDS = GeoBounds(west=-7.54, south=49.24, east=2.95, north=59.40)
 CENTRAL_EUROPE_BOUNDS = GeoBounds(west=5.50, south=46.00, east=24.20, north=55.20)
 
+CZECHIA_CENTER = GeoCenter(latitude=49.8, longitude=15.47)
+GERMANY_CENTER = GeoCenter(latitude=51.16, longitude=10.45)
+POLAND_CENTER = GeoCenter(latitude=52.0, longitude=19.4)
+SLOVAKIA_CENTER = GeoCenter(latitude=48.7, longitude=19.7)
+AUSTRIA_CENTER = GeoCenter(latitude=47.6, longitude=14.1)
+BELGIUM_CENTER = GeoCenter(latitude=50.64, longitude=4.66)
+SWITZERLAND_CENTER = GeoCenter(latitude=46.8, longitude=8.23)
+DENMARK_CENTER = GeoCenter(latitude=56.0, longitude=9.5)
+ESTONIA_CENTER = GeoCenter(latitude=58.6, longitude=25.0)
+FINLAND_CENTER = GeoCenter(latitude=63.0, longitude=26.0)
+FRANCE_CENTER = GeoCenter(latitude=46.6, longitude=2.5)
+UNITED_KINGDOM_CENTER = GeoCenter(latitude=53.5, longitude=-2.5)
+GREECE_CENTER = GeoCenter(latitude=39.5, longitude=22.0)
+CROATIA_CENTER = GeoCenter(latitude=45.1, longitude=15.5)
+HUNGARY_CENTER = GeoCenter(latitude=47.16, longitude=19.5)
+IRELAND_CENTER = GeoCenter(latitude=53.2, longitude=-8.0)
+ICELAND_CENTER = GeoCenter(latitude=64.9, longitude=-18.6)
+ITALY_CENTER = GeoCenter(latitude=42.8, longitude=12.8)
+LATVIA_CENTER = GeoCenter(latitude=56.9, longitude=25.0)
+LITHUANIA_CENTER = GeoCenter(latitude=55.2, longitude=23.9)
+MOLDOVA_CENTER = GeoCenter(latitude=47.2, longitude=28.5)
+MALTA_CENTER = GeoCenter(latitude=35.9, longitude=14.4)
+NETHERLANDS_CENTER = GeoCenter(latitude=52.2, longitude=5.5)
+NORWAY_CENTER = GeoCenter(latitude=61.5, longitude=9.0)
+PORTUGAL_CENTER = GeoCenter(latitude=39.6, longitude=-8.0)
+ROMANIA_CENTER = GeoCenter(latitude=45.9, longitude=25.0)
+SERBIA_CENTER = GeoCenter(latitude=44.0, longitude=20.9)
+SPAIN_CENTER = GeoCenter(latitude=40.2, longitude=-3.7)
+SWEDEN_CENTER = GeoCenter(latitude=62.0, longitude=15.0)
+SLOVENIA_CENTER = GeoCenter(latitude=46.1, longitude=14.8)
+CENTRAL_EUROPE_CENTER = GeoCenter(latitude=50.6, longitude=14.85)
+
+DEFAULT_PUBLISH_DELAY_SECONDS = 260
+CZECHIA_PUBLISH_DELAY_SECONDS = 10
+IT_SRI_PUBLISH_DELAY_SECONDS = 8 * 60
+
 
 cz_maxz = InputConfig(
     id="cz_maxz",
@@ -562,6 +606,8 @@ cz_product = ProductConfig(
     inputs=inputs(cz_maxz),
     output_dir=OUTPUT_DIR / "cz",
     geo_bounds=CZECHIA_BOUNDS,
+    center=CZECHIA_CENTER,
+    publish_delay_seconds=CZECHIA_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_cz"),
     priority=0,
 )
@@ -572,6 +618,8 @@ de_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "de",
     geo_bounds=GERMANY_BOUNDS,
+    center=GERMANY_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_de"),
     priority=10,
 )
@@ -582,6 +630,8 @@ pl_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "pl",
     geo_bounds=POLAND_BOUNDS,
+    center=POLAND_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_pl"),
     priority=10,
 )
@@ -592,6 +642,8 @@ sk_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "sk",
     geo_bounds=SLOVAKIA_BOUNDS,
+    center=SLOVAKIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_sk"),
     priority=5,
 )
@@ -602,6 +654,8 @@ at_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "at",
     geo_bounds=AUSTRIA_BOUNDS,
+    center=AUSTRIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_at"),
     priority=10,
 )
@@ -612,6 +666,8 @@ be_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "be",
     geo_bounds=BELGIUM_BOUNDS,
+    center=BELGIUM_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_be"),
     priority=10,
 )
@@ -622,6 +678,8 @@ ch_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "ch",
     geo_bounds=SWITZERLAND_BOUNDS,
+    center=SWITZERLAND_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_ch"),
     priority=10,
 )
@@ -632,6 +690,8 @@ dk_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "dk",
     geo_bounds=DENMARK_BOUNDS,
+    center=DENMARK_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_dk"),
     priority=10,
 )
@@ -642,6 +702,8 @@ ee_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "ee",
     geo_bounds=ESTONIA_BOUNDS,
+    center=ESTONIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_ee"),
     priority=10,
 )
@@ -652,6 +714,8 @@ fi_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "fi",
     geo_bounds=FINLAND_BOUNDS,
+    center=FINLAND_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_fi"),
     render=NO_OXIPNG_RENDER,
     priority=10,
@@ -663,6 +727,8 @@ fr_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "fr",
     geo_bounds=FRANCE_BOUNDS,
+    center=FRANCE_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_fr"),
     priority=10,
 )
@@ -673,6 +739,8 @@ gb_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "gb",
     geo_bounds=UNITED_KINGDOM_BOUNDS,
+    center=UNITED_KINGDOM_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_gb"),
     priority=10,
 )
@@ -683,6 +751,8 @@ gr_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "gr",
     geo_bounds=GREECE_BOUNDS,
+    center=GREECE_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_gr"),
     render=NODATA_TINT_RENDER,
     priority=10,
@@ -694,6 +764,8 @@ hr_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "hr",
     geo_bounds=CROATIA_BOUNDS,
+    center=CROATIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_hr"),
     priority=10,
 )
@@ -704,6 +776,8 @@ hu_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "hu",
     geo_bounds=HUNGARY_BOUNDS,
+    center=HUNGARY_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_hu"),
     priority=10,
 )
@@ -714,6 +788,8 @@ ie_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "ie",
     geo_bounds=IRELAND_BOUNDS,
+    center=IRELAND_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_ie"),
     priority=10,
 )
@@ -724,6 +800,8 @@ is_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "is",
     geo_bounds=ICELAND_BOUNDS,
+    center=ICELAND_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_is"),
     priority=10,
 )
@@ -734,6 +812,8 @@ it_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "it",
     geo_bounds=ITALY_BOUNDS,
+    center=ITALY_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_it"),
     render=NODATA_TINT_RENDER,
     priority=10,
@@ -749,6 +829,8 @@ it_sri_product = ProductConfig(
     inputs=inputs(it_sri_arco),
     output_dir=OUTPUT_DIR / "it_sri",
     geo_bounds=ITALY_SRI_BOUNDS,
+    center=ITALY_CENTER,
+    publish_delay_seconds=IT_SRI_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_it_sri"),
     render=SRI_RENDER,
     priority=10,
@@ -760,6 +842,8 @@ lv_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "lv",
     geo_bounds=LATVIA_BOUNDS,
+    center=LATVIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_lv"),
     priority=10,
 )
@@ -770,6 +854,8 @@ lt_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "lt",
     geo_bounds=LITHUANIA_BOUNDS,
+    center=LITHUANIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_lt"),
     priority=10,
 )
@@ -780,6 +866,8 @@ md_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "md",
     geo_bounds=MOLDOVA_BOUNDS,
+    center=MOLDOVA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_md"),
     render=NODATA_TINT_RENDER,
     priority=10,
@@ -791,6 +879,8 @@ mt_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "mt",
     geo_bounds=MALTA_BOUNDS,
+    center=MALTA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_mt"),
     priority=10,
 )
@@ -801,6 +891,8 @@ nl_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "nl",
     geo_bounds=NETHERLANDS_BOUNDS,
+    center=NETHERLANDS_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_nl"),
     priority=10,
 )
@@ -811,6 +903,8 @@ no_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "no",
     geo_bounds=NORWAY_BOUNDS,
+    center=NORWAY_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_no"),
     render=NO_OXIPNG_RENDER,
     priority=10,
@@ -822,6 +916,8 @@ pt_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "pt",
     geo_bounds=PORTUGAL_BOUNDS,
+    center=PORTUGAL_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_pt"),
     priority=10,
 )
@@ -832,6 +928,8 @@ ro_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "ro",
     geo_bounds=ROMANIA_BOUNDS,
+    center=ROMANIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_ro"),
     priority=10,
 )
@@ -842,6 +940,8 @@ rs_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "rs",
     geo_bounds=SERBIA_BOUNDS,
+    center=SERBIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_rs"),
     priority=10,
 )
@@ -852,6 +952,8 @@ es_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "es",
     geo_bounds=SPAIN_BOUNDS,
+    center=SPAIN_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_es"),
     priority=10,
 )
@@ -862,6 +964,8 @@ se_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "se",
     geo_bounds=SWEDEN_BOUNDS,
+    center=SWEDEN_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_se"),
     render=NO_OXIPNG_RENDER,
     priority=10,
@@ -873,6 +977,8 @@ si_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "si",
     geo_bounds=SLOVENIA_BOUNDS,
+    center=SLOVENIA_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_si"),
     priority=10,
 )
@@ -883,6 +989,8 @@ central_europe_product = ProductConfig(
     inputs=inputs(opera_dbzh),
     output_dir=OUTPUT_DIR / "central_europe",
     geo_bounds=CENTRAL_EUROPE_BOUNDS,
+    center=CENTRAL_EUROPE_CENTER,
+    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_central_europe"),
     priority=20,
 )

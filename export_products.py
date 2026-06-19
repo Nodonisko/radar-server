@@ -9,12 +9,17 @@ def export_products() -> None:
         export_data.append({
             "id": p.id,
             "label": p.label,
+            "center": {
+                "latitude": p.center.latitude,
+                "longitude": p.center.longitude,
+            },
             "bounds": {
                 "west": p.geo_bounds.west,
                 "south": p.geo_bounds.south,
                 "east": p.geo_bounds.east,
                 "north": p.geo_bounds.north,
-            }
+            },
+            "publishDelaySeconds": p.publish_delay_seconds,
         })
     
     output_path = Path("products.json")
