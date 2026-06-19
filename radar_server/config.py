@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec, Rgba
-from .rendering.palettes import STANDARD_DBZH
+from .rendering.palettes import SRI_RATE, STANDARD_DBZH
 from .rendering.pipeline import (
     DEFAULT_VARIANTS,
     Bounds,
@@ -185,6 +185,13 @@ NO_OXIPNG_RENDER = RenderProfile(optimize=False)
 # reads clearly on the map; clear-sky and below-threshold cells stay transparent.
 NODATA_TINT_RENDER = RenderProfile(nodata_fill=Rgba(0, 0, 0, 0.15))
 
+# Surface Rainfall Intensity (precip rate, mm/h) render profile for the Italian
+# DPC ARCO composite. No-coverage cells are left fully transparent (no tint):
+# unlike OPERA, the DPC composite leaves ~half the domain as scattered no-data,
+# so a footprint tint reads as noisy range circles. To show the footprint
+# instead, swap in ``RenderProfile(palette=SRI_RATE, nodata_fill=Rgba(0,0,0,0.15))``.
+SRI_RENDER = RenderProfile(palette=SRI_RATE)
+
 
 @dataclass(frozen=True)
 class HttpDirectorySource:
@@ -223,7 +230,38 @@ class OrdApiSource:
         return _get_env_value(self.api_key_env)
 
 
-SourceConfig = Union[HttpDirectorySource, OrdApiSource]
+@dataclass(frozen=True)
+class ArcoZarrSource:
+    """Analysis-Ready Cloud-Optimized (Zarr) radar store, read over HTTP.
+
+    The store is a consolidated Zarr v2 archive served at ``store_url`` (e.g.
+    MeteoHub's ``radar.zarr``). Each frame is a single chunk on a pre-allocated
+    time axis; the root ``last_valid`` attribute points at the newest written
+    frame. Access uses HTTP basic auth (account email as username + ARCO access
+    key). Unlike the extraction API, ARCO object reads are not subject to the
+    10-request/hour quota, so ordinary polling is fine.
+    """
+
+    id: str
+    label: str
+    store_url: str
+    variable: str = "RR"
+    username_env: str = "ARCO_USERNAME"
+    # Tolerate the common ``.env`` typo (single S) alongside the correct name.
+    api_key_envs: tuple[str, ...] = ("ARCO_ACCESS_KEY", "ARCO_ACCES_KEY")
+    polling: SmartPollingPolicy = SmartPollingPolicy()
+
+    def credentials(self) -> tuple[str | None, str | None]:
+        username = _get_env_value(self.username_env)
+        key: str | None = None
+        for name in self.api_key_envs:
+            key = _get_env_value(name)
+            if key:
+                break
+        return username, key
+
+
+SourceConfig = Union[HttpDirectorySource, OrdApiSource, ArcoZarrSource]
 
 
 @dataclass(frozen=True)
@@ -414,6 +452,16 @@ ORD_SMART_POLLING = SmartPollingPolicy(
     quick_check_limit=30,
 )
 
+# ARCO frames publish on a 5-minute grid but only become readable ~7-8 minutes
+# after their valid time, so aggressive quick polling is wasteful. Baseline
+# every 2 minutes, with gentle 60s quick checks once a new frame is expected.
+ARCO_SMART_POLLING = SmartPollingPolicy(
+    expected_period_seconds=300,
+    baseline_interval_seconds=120,
+    quick_check_interval_seconds=60,
+    quick_check_limit=10,
+)
+
 
 chmi_current = HttpDirectorySource(
     id="chmi_current",
@@ -426,6 +474,14 @@ ord_api = OrdApiSource(
     id="ord_api",
     label="EUMETNET Open Radar Data API",
     polling=ORD_SMART_POLLING,
+)
+
+arco_radar = ArcoZarrSource(
+    id="arco_radar",
+    label="MeteoHub ARCO radar (DPC SRI, Zarr)",
+    store_url="https://meteohub.agenziaitaliameteo.it/api/arco/radar.zarr",
+    variable="RR",
+    polling=ARCO_SMART_POLLING,
 )
 
 
@@ -446,6 +502,10 @@ HUNGARY_BOUNDS = GeoBounds(west=15.05, south=45.02, east=23.95, north=49.29)
 IRELAND_BOUNDS = GeoBounds(west=-11.65, south=50.73, east=-4.80, north=56.10)
 ICELAND_BOUNDS = GeoBounds(west=-26.27, south=62.68, east=-11.80, north=67.25)
 ITALY_BOUNDS = GeoBounds(west=5.59, south=37.20, east=19.46, north=47.81)
+# Full WGS84 footprint of the Italian DPC SRI grid (its native tmerc domain,
+# 1200x1400 km at 1 km), rounded outward so no data is clipped. Wider than
+# ITALY_BOUNDS, which would cut off the southern coverage band (Sicily/Ionian).
+ITALY_SRI_BOUNDS = GeoBounds(west=4.52, south=35.06, east=20.48, north=47.85)
 LATVIA_BOUNDS = GeoBounds(west=19.67, south=54.95, east=29.51, north=58.79)
 LITHUANIA_BOUNDS = GeoBounds(west=19.77, south=53.17, east=28.06, north=57.16)
 MOLDOVA_BOUNDS = GeoBounds(west=25.54, south=44.74, east=31.17, north=49.21)
@@ -482,6 +542,18 @@ opera_dbzh = InputConfig(
         method="comp",
         notes="Use this as the reliable ORD-backed input for countries without confirmed national feeds.",
     ),
+)
+
+# Italian DPC national radar composite (Surface Rainfall Intensity), pulled from
+# MeteoHub's live ARCO Zarr store. Each frame is materialized locally as an ODIM
+# HDF5 file so it flows through the normal decode/render/forecast pipeline.
+it_sri_arco = InputConfig(
+    id="it_sri_arco",
+    label="Italy DPC SRI composite (ARCO Zarr)",
+    source=arco_radar,
+    local_dir=DATA_DIR / "it_sri" / "arco",
+    quantity="RATE",
+    odim_product="SURF",
 )
 
 cz_product = ProductConfig(
@@ -667,6 +739,21 @@ it_product = ProductConfig(
     priority=10,
 )
 
+# Native Italian DPC composite (Surface Rainfall Intensity) from the ARCO Zarr
+# feed. Kept as a separate product/output so it can run alongside (and be
+# compared against) the OPERA-cropped `it` product, or swapped in by editing
+# COUNTRY_PRODUCTS below.
+it_sri_product = ProductConfig(
+    id="it_sri",
+    label="Italy radar (DPC SRI)",
+    inputs=inputs(it_sri_arco),
+    output_dir=OUTPUT_DIR / "it_sri",
+    geo_bounds=ITALY_SRI_BOUNDS,
+    base_name=timestamped_base("radar_it_sri"),
+    render=SRI_RENDER,
+    priority=10,
+)
+
 lv_product = ProductConfig(
     id="lv",
     label="Latvia radar",
@@ -819,6 +906,7 @@ hu_forecast = ForecastProduct(id="hu_forecast", parent=hu_product, priority=1010
 ie_forecast = ForecastProduct(id="ie_forecast", parent=ie_product, priority=1010)
 is_forecast = ForecastProduct(id="is_forecast", parent=is_product, priority=1010)
 it_forecast = ForecastProduct(id="it_forecast", parent=it_product, priority=1010)
+it_sri_forecast = ForecastProduct(id="it_sri_forecast", parent=it_sri_product, priority=1010)
 lv_forecast = ForecastProduct(id="lv_forecast", parent=lv_product, priority=1010)
 lt_forecast = ForecastProduct(id="lt_forecast", parent=lt_product, priority=1010)
 md_forecast = ForecastProduct(id="md_forecast", parent=md_product, priority=1010)
@@ -838,8 +926,8 @@ central_europe_forecast = ForecastProduct(
 )
 
 
-SOURCES: tuple[SourceConfig, ...] = (chmi_current, ord_api)
-INPUTS: tuple[InputConfig, ...] = (cz_maxz, opera_dbzh)
+SOURCES: tuple[SourceConfig, ...] = (chmi_current, ord_api, arco_radar)
+INPUTS: tuple[InputConfig, ...] = (cz_maxz, opera_dbzh, it_sri_arco)
 COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     cz_product,
     de_product,
@@ -871,6 +959,7 @@ COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     es_product,
     se_product,
     si_product,
+    it_sri_product,
 )
 COMPOSITE_PRODUCTS: tuple[ProductConfig, ...] = (
     # central_europe_product,
@@ -907,6 +996,7 @@ FORECAST_PRODUCTS: tuple[ForecastProduct, ...] = (
     es_forecast,
     se_forecast,
     si_forecast,
+    it_sri_forecast,
     # central_europe_forecast,
 )
 

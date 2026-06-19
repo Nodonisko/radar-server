@@ -20,6 +20,7 @@ import requests
 from requests import RequestException
 
 from .config import (
+    ArcoZarrSource,
     GeoBounds,
     HttpDirectorySource,
     InputConfig,
@@ -34,6 +35,11 @@ TIMEOUT_SECONDS = 30
 MAX_RETRIES = 4
 RETRY_DELAY_SECONDS = 2.0
 CHUNK_SIZE = 1024 * 1024
+
+# Cache of the (static) ARCO time axis per store URL. The axis is pre-allocated
+# years into the future and never changes; only the data chunks fill in, so one
+# fetch per process is enough to map a chunk index to its valid timestamp.
+_ARCO_TIME_AXIS_CACHE: dict[str, "object"] = {}
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,14 @@ class FetchError(RuntimeError):
 
 class RateLimitedError(FetchError):
     """The upstream service rejected the request due to rate limiting."""
+
+
+class SkippableFetchError(FetchError):
+    """A single remote file is unavailable but the rest of the batch is fine.
+
+    Raised when an expected ARCO frame chunk is missing (a rare radar gap):
+    the sync skips just that frame instead of failing the whole input.
+    """
 
 
 @dataclass(frozen=True)
@@ -98,6 +112,8 @@ def discover_remote_files(
         files = _discover_http_directory(input_config, source)
     elif isinstance(source, OrdApiSource):
         files = _discover_ord(input_config, source, now=now, limit=limit)
+    elif isinstance(source, ArcoZarrSource):
+        files = _discover_arco(input_config, source, now=now, limit=limit)
     else:
         raise TypeError(f"unsupported source config: {source!r}")
 
@@ -121,7 +137,13 @@ def sync_input(
         for remote in discover_remote_files(input_config, now=reference, limit=limit)
         if _within_input_retention(input_config, remote.timestamp, reference)
     ]
-    return [download_remote_file(remote) for remote in remotes]
+    files: list[LocalInputFile] = []
+    for remote in remotes:
+        try:
+            files.append(download_remote_file(remote))
+        except SkippableFetchError as exc:
+            LOGGER.info("Skipping %s: %s", remote.filename, exc)
+    return files
 
 
 def sync_inputs(
@@ -150,6 +172,9 @@ def download_remote_file(remote: RemoteInputFile) -> LocalInputFile:
     destination = remote.input.local_dir / remote.filename
     if destination.exists() and destination.stat().st_size > 0:
         return LocalInputFile(remote.input, remote.timestamp, destination, remote, downloaded=False)
+
+    if isinstance(remote.input.source, ArcoZarrSource):
+        return _download_arco_frame(remote, destination)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_name(f"{destination.name}.part")
@@ -351,13 +376,224 @@ def _feature_matches_items_query(properties: dict[str, Any], query: OrdItemsQuer
     return True
 
 
+# ARCO (Zarr) source -----------------------------------------------------------
+
+
+def _discover_arco(
+    input_config: InputConfig,
+    source: ArcoZarrSource,
+    *,
+    now: datetime | None,
+    limit: int | None,
+) -> list[RemoteInputFile]:
+    """Discover recent ARCO frames as materializable :class:`RemoteInputFile`s.
+
+    Reads the consolidated metadata for the data frontier (``last_valid``) and
+    enumerates that frame plus the preceding ones, newest-first. Frames are not
+    probed here; a missing chunk surfaces as a skippable error at download time.
+    """
+
+    import numpy as np
+
+    auth = _arco_auth(source)
+    metadata = _arco_metadata(source, auth)
+    last_valid = metadata.get(".zattrs", {}).get("last_valid")
+    if not last_valid:
+        LOGGER.warning("ARCO source %s has no last_valid attribute; nothing to fetch", source.id)
+        return []
+
+    georef = _arco_georef(metadata, source.variable)
+    axis = _arco_time_axis(source, auth)
+    lv = np.datetime64(last_valid, "m")
+    frontier = int(np.searchsorted(axis, lv))
+    if frontier >= axis.size:
+        frontier = axis.size - 1
+    while frontier > 0 and axis[frontier] > lv:
+        frontier -= 1
+
+    window = limit if limit is not None else _arco_window(input_config)
+    window = max(1, window)
+
+    files: list[RemoteInputFile] = []
+    for offset in range(window):
+        idx = frontier - offset
+        if idx < 0:
+            break
+        timestamp = axis[idx].astype("datetime64[s]").astype(datetime)
+        files.append(
+            RemoteInputFile(
+                input=input_config,
+                timestamp=timestamp,
+                url=_arco_chunk_url(source, idx),
+                filename=f"{input_config.id}_{timestamp:%Y%m%d%H%M%S}.h5",
+                metadata={"arco_index": idx, "arco_georef": georef, "arco_dtype": georef["dtype"]},
+            )
+        )
+    return files
+
+
+def _download_arco_frame(remote: RemoteInputFile, destination: Path) -> LocalInputFile:
+    import numpy as np
+    from numcodecs import Blosc
+
+    source = remote.input.source
+    assert isinstance(source, ArcoZarrSource)
+    georef = remote.metadata["arco_georef"]
+    response = _arco_get(remote.url, _arco_auth(source))
+    raw = Blosc().decode(response.content)
+    values = np.frombuffer(raw, dtype=remote.metadata["arco_dtype"]).reshape(georef["ysize"], georef["xsize"])
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = destination.with_name(f"{destination.name}.part")
+    LOGGER.info("Materializing ARCO frame %s -> %s", remote.url, destination)
+    _write_odim_sri(tmp_path, values, georef, remote.timestamp)
+    tmp_path.replace(destination)
+    return LocalInputFile(remote.input, remote.timestamp, destination, remote, downloaded=True)
+
+
+def _write_odim_sri(path: Path, values, georef: dict[str, Any], timestamp: datetime) -> None:
+    """Write a minimal ODIM HDF5 the project decoder understands.
+
+    The ARCO ``RR`` field is a precipitation rate in mm/h with NaN outside
+    coverage. We store it with gain=1/offset=0 and a ``nodata`` sentinel for
+    NaN; the ``undetect`` sentinel is left unused (dry 0.0 cells fall below the
+    palette floor and render transparent anyway).
+    """
+
+    import h5py
+    import numpy as np
+
+    nodata = -9999.0
+    undetect = -8888.0
+    data = np.where(np.isfinite(values), values, nodata).astype("float32")
+
+    with h5py.File(path, "w") as hdf:
+        what = hdf.create_group("what")
+        what.attrs["object"] = "COMP"
+        what.attrs["date"] = timestamp.strftime("%Y%m%d")
+        what.attrs["time"] = timestamp.strftime("%H%M%S")
+
+        where = hdf.create_group("where")
+        where.attrs["projdef"] = georef["projdef"]
+        where.attrs["xsize"] = int(georef["xsize"])
+        where.attrs["ysize"] = int(georef["ysize"])
+        where.attrs["xscale"] = float(georef["xscale"])
+        where.attrs["yscale"] = float(georef["yscale"])
+        where.attrs["UL_lon"] = float(georef["UL_lon"])
+        where.attrs["UL_lat"] = float(georef["UL_lat"])
+
+        dataset = hdf.create_group("dataset1")
+        dataset.create_group("what").attrs["product"] = "SURF"
+        data1 = dataset.create_group("data1")
+        data1.create_dataset("data", data=data, compression="gzip", compression_opts=4)
+        meta = data1.create_group("what")
+        meta.attrs["quantity"] = "RATE"
+        meta.attrs["gain"] = 1.0
+        meta.attrs["offset"] = 0.0
+        meta.attrs["nodata"] = nodata
+        meta.attrs["undetect"] = undetect
+
+
+def _arco_metadata(source: ArcoZarrSource, auth: tuple[str, str]) -> dict[str, Any]:
+    payload = _request_json(f"{source.store_url}/.zmetadata", auth=auth)
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise FetchError(f"ARCO store {source.store_url!r} returned no consolidated metadata")
+    return metadata
+
+
+def _arco_georef(metadata: dict[str, Any], variable: str) -> dict[str, Any]:
+    crs = metadata.get("crs/.zattrs")
+    array = metadata.get(f"{variable}/.zarray")
+    if not isinstance(crs, dict) or not isinstance(array, dict):
+        raise FetchError("ARCO metadata missing crs attributes or variable array spec")
+    return {
+        "projdef": str(crs["proj4"]),
+        "xsize": int(crs["where_xsize"]),
+        "ysize": int(crs["where_ysize"]),
+        "xscale": float(crs["where_xscale"]),
+        "yscale": float(crs["where_yscale"]),
+        "UL_lon": float(crs["where_UL_lon"]),
+        "UL_lat": float(crs["where_UL_lat"]),
+        "dtype": str(array["dtype"]),
+        "variable": variable,
+    }
+
+
+def _arco_time_axis(source: ArcoZarrSource, auth: tuple[str, str]):
+    import numpy as np
+    from numcodecs import Blosc
+
+    cached = _ARCO_TIME_AXIS_CACHE.get(source.store_url)
+    if cached is not None:
+        return cached
+    response = _request("GET", f"{source.store_url}/time/0", auth=auth)
+    decoded = Blosc().decode(response.content)
+    axis = np.frombuffer(decoded, dtype="<i8").view("<M8[ns]").astype("datetime64[m]")
+    _ARCO_TIME_AXIS_CACHE[source.store_url] = axis
+    return axis
+
+
+def _arco_chunk_url(source: ArcoZarrSource, index: int) -> str:
+    # 3D array (time, y, x) with one chunk per timestep and "." separators.
+    return f"{source.store_url}/{source.variable}/{index}.0.0"
+
+
+def _arco_window(input_config: InputConfig) -> int:
+    keep_for = input_config.retention.keep_for_seconds
+    period = max(1, input_config.source.polling.expected_period_seconds)
+    if keep_for is None:
+        return 12
+    return max(1, int(keep_for // period) + 2)
+
+
+def _arco_auth(source: ArcoZarrSource) -> tuple[str, str]:
+    username, key = source.credentials()
+    if not username or not key:
+        raise FetchError(
+            f"ARCO source {source.id!r} missing credentials; set ARCO_USERNAME and ARCO_ACCESS_KEY"
+        )
+    return username, key
+
+
+def _arco_get(url: str, auth: tuple[str, str]) -> requests.Response:
+    """GET an ARCO chunk; raise :class:`SkippableFetchError` if it isn't there."""
+
+    last_error: RequestException | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, timeout=TIMEOUT_SECONDS, auth=auth)
+        except RequestException as exc:
+            last_error = exc
+            LOGGER.warning("ARCO GET failed for %s (attempt %d/%d): %s", url, attempt, MAX_RETRIES, exc)
+            time.sleep(RETRY_DELAY_SECONDS * attempt)
+            continue
+        if response.status_code == 404:
+            raise SkippableFetchError(f"ARCO chunk not available: {url!r}")
+        if response.status_code == 429:
+            raise RateLimitedError(f"rate limited by ARCO store for {url!r}")
+        try:
+            response.raise_for_status()
+        except RequestException as exc:
+            last_error = exc
+            LOGGER.warning("ARCO GET %s returned %s (attempt %d/%d)", url, response.status_code, attempt, MAX_RETRIES)
+            time.sleep(RETRY_DELAY_SECONDS * attempt)
+            continue
+        return response
+    raise FetchError(f"giving up on ARCO chunk {url!r} after {MAX_RETRIES} attempts") from last_error
+
+
 def _request_json(
     url: str,
     params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
+    auth: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     request_headers = {"accept": "application/json", **(headers or {})}
-    response = _request("GET", url, params=params, headers=request_headers)
+    kwargs: dict[str, Any] = {"params": params, "headers": request_headers}
+    if auth is not None:
+        kwargs["auth"] = auth
+    response = _request("GET", url, **kwargs)
     if response.status_code == 204 or not response.content:
         return {}
     return response.json()

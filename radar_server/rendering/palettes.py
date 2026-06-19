@@ -63,5 +63,29 @@ EXTENDED_DBZH = PaletteSpec(
     ),
 )
 
+# Marshall-Palmer Z-R relation (Z = a * R^b, with Z in mm^6/m^3, R in mm/h).
+# Used to translate the dBZH palette's reflectivity breakpoints into the
+# equivalent rain-rate breakpoints, so the rate palette colors a storm the same
+# way the reflectivity palette would.
+_ZR_A, _ZR_B = 200.0, 1.6
+
+
+def _dbz_to_rate(dbz: float) -> float:
+    return round((10.0 ** (dbz / 10.0) / _ZR_A) ** (1.0 / _ZR_B), 2)
+
+
+# Surface Rainfall Intensity (precipitation rate, mm/h). Used by the Italian DPC
+# radar composite (ARCO Zarr), whose quantity is a rate, not reflectivity. It
+# reuses the exact STANDARD_DBZH colors, with each dBZH boundary mapped to its
+# rain-rate equivalent via Marshall-Palmer, so the same precipitation reads the
+# same as in the reflectivity products. Below the floor (~0.06 mm/h) is
+# transparent.
+SRI_RATE = PaletteSpec(
+    name="sri_rate",
+    quantity="RATE",
+    levels=tuple(_dbz_to_rate(float(v)) for v in range(4, 68, 4)),
+    colors=STANDARD_DBZH.colors,
+)
+
 # Lookup by name, for config that selects palettes by string.
-PALETTES = {p.name: p for p in (STANDARD_DBZH, EXTENDED_DBZH)}
+PALETTES = {p.name: p for p in (STANDARD_DBZH, EXTENDED_DBZH, SRI_RATE)}

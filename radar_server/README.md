@@ -36,6 +36,11 @@ Create local `.env`:
 
 ```bash
 METEOGATE_API_KEY=...
+
+# MeteoHub ARCO (Italian DPC SRI composite). Username is the account email;
+# the access key is created in the MeteoHub profile under "ARCO Access Key".
+ARCO_USERNAME=you@example.com
+ARCO_ACCESS_KEY=...
 ```
 
 Optional Cloudflare R2 uploads for rendered PNG outputs:
@@ -81,6 +86,26 @@ objects. Uploaded PNGs use `Cache-Control: public, max-age=31536000, immutable`.
 - `mqtt`: MQTT watcher only, downloads without rendering (debug tool).
 - omit `--no-optimize` to use `oxipng`.
 
+Forecast-generation benchmark, using local HDF fixtures and excluding rendering:
+
+```bash
+/opt/homebrew/bin/python3.13 -m radar_server.benchmark_forecast_generation
+/opt/homebrew/bin/python3.13 -m radar_server.benchmark_forecast_generation --forecast-id pl_forecast
+```
+
+By default this loads/prepares the latest history fields for the selected
+forecast once, then measures only `generate_forecast_fields(...)`. Use
+`--forecast-id`, `--include-load` to time HDF load/prep plus generation,
+`--iterations N` for longer runs, and `--json` for machine-readable output.
+
+The performance knobs (see "Forecasts" below) can be A/B tested per run:
+`--motion-grid-step N` / `--motion-grid-max N` for the motion grid,
+`--warp-grid-step N` for the warp's trajectory grid, and
+`--fast-motion/--no-fast-motion`, `--fast-idw/--no-fast-idw`, and
+`--fast-warp/--no-fast-warp` to toggle the optimized motion estimation,
+interpolation, and extrapolation independently. Omitting a flag uses the
+forecast's configured value.
+
 ## Config
 
 Main config is Python code in `radar_server/config.py`.
@@ -112,8 +137,8 @@ Runtime mode:
 MQTT / polling (main thread, networking only)
   -> ingest queue -> DownloadWorker (1 thread): download, refresh index,
      enqueue render tasks, record wanted forecasts
-  -> render priority queue -> RenderWorker (1 thread, one render at a time)
-  -> ForecastGenPool (2 threads, dispatched only while render lane is idle):
+  -> render priority queue -> RenderWorker (3 threads, parallel renders)
+  -> ForecastGenPool (3 threads, dispatched only while render lane is idle):
      pysteps motion + extrapolation -> fields to disk -> forecast render tasks
 ```
 
@@ -157,14 +182,19 @@ MQTT / polling (main thread, networking only)
     (no large gather/product temporaries). Numerically identical to pysteps
     (~6e-15) and ~10x faster on the densify step.
   - `fast_warp`: a `cv2.remap` semi-Lagrangian extrapolation replacing
-    `scipy.ndimage.map_coordinates`.
-  Combined with `motion_grid_step`, these cut forecast-only generation roughly
-  in half again versus the previous (`fast_idw`+`fast_warp`) path — Norway
-  ~3.07s → ~1.37s and Poland ~0.49s → ~0.22s — with no accuracy cost
-  (`fast_motion`/`fast_idw` are bit-for-bit equal to pysteps; only `fast_warp`'s
-  bilinear sampling differs, at <0.05 dBZ RMSE). `fast_idw`/`fast_motion`
-  require `numba` (see `requirements.txt`); the IDW path falls back to numpy if
-  numba is unavailable. Disable any of them via config or the benchmark flags.
+    `scipy.ndimage.map_coordinates`. Its dominant cost is the repeated velocity
+    warps that integrate the displacement trajectory; since that field is
+    smooth, `ForecastProduct.warp_grid_step` (default 2) integrates it on a
+    coarsened grid and upscales the displacement for the full-resolution precip
+    warps, roughly halving the warp cost for ~0.08 dBZ RMSE (set to 1 to
+    disable; 4 is ~3.8x faster on the warp at ~0.18 dBZ).
+  Combined with `motion_grid_step`, these cut forecast-only generation several
+  times over versus the stock pysteps path — Norway ~3.07s → ~0.95s and Poland
+  ~0.49s → ~0.21s — at a sub-0.2 dBZ RMSE cost (`fast_motion`/`fast_idw` are
+  bit-for-bit equal to pysteps; the small difference comes from `fast_warp`'s
+  bilinear sampling and `warp_grid_step`). `fast_idw`/`fast_motion` require
+  `numba` (see `requirements.txt`); the IDW path falls back to numpy if numba is
+  unavailable. Disable any of them via config or the benchmark flags.
 - Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
   (atomic clear-and-replace, latest issue only); rendering reads them like
   ordinary inputs, so it is idempotent and restart-durable.
@@ -177,6 +207,17 @@ MQTT / polling (main thread, networking only)
 - OPERA live updates use MQTT topic:
   `ORD/eu.eumetnet/0-20010-0-OPERA/DBZH`.
 - API key is sent as header `apikey`.
+- Italy (`it_sri`) uses the MeteoHub ARCO Zarr store (`radar.zarr`, variable
+  `RR`), read over HTTP with basic auth (`ARCO_USERNAME` + `ARCO_ACCESS_KEY`).
+  The data frontier is the store's `last_valid` attribute; each frame is one
+  Zarr chunk, decompressed (Blosc, via `numcodecs`) and materialized locally as
+  an ODIM HDF5 file so it flows through the normal decode/render/forecast path.
+  This is Surface Rainfall Intensity (`RATE`, mm/h), rendered with the `sri_rate`
+  palette — not reflectivity. There is no MQTT feed, so it is polled (no ORD
+  quota applies to ARCO object reads): baseline every 2 min, with gentle 60s
+  quick checks once a new frame is expected (frames publish ~7-8 min after their
+  valid time). The OPERA-cropped `it` product is kept alongside `it_sri` so the
+  two can be compared or switched in `COUNTRY_PRODUCTS`.
 
 ## Backfill
 
