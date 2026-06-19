@@ -84,13 +84,15 @@ def test_download_arco_frame_writes_decodable_odim(monkeypatch, tmp_path) -> Non
     local = arco.download_frame(remote, tmp_path / remote.filename)
 
     assert local.downloaded is True
-    field = load_odim_hdf(local.path, quantity="RATE")
-    assert field.quantity == "RATE"
+    field = load_odim_hdf(local.path)  # decoder defaults to DBZH
+    assert field.quantity == "DBZH"
     assert field.transform.width == 3 and field.transform.height == 2
     decoded = field.values
     assert np.isnan(decoded[0, 2]) and np.isnan(decoded[1, 0])  # NaN round-trips as nodata
-    assert decoded[0, 1] == 2.5 and decoded[1, 1] == 10.0  # wet cells preserved
-    assert decoded[0, 0] == 0.0 and decoded[1, 2] == 0.0  # dry cells stay 0 (render transparent)
+    # Wet cells are converted to reflectivity via Marshall-Palmer (dBZ = 23.01 + 16*log10(R)).
+    assert np.isclose(decoded[0, 1], 29.377, atol=1e-2)  # 2.5 mm/h
+    assert np.isclose(decoded[1, 1], 39.010, atol=1e-2)  # 10 mm/h
+    assert np.isneginf(decoded[0, 0]) and np.isneginf(decoded[1, 2])  # dry cells -> transparent
 
 
 def test_sync_input_skips_missing_arco_chunk(monkeypatch, tmp_path) -> None:

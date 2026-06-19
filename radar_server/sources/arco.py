@@ -106,26 +106,48 @@ def download_frame(remote: RemoteInputFile, destination: Path) -> LocalInputFile
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_name(f"{destination.name}.part")
     LOGGER.info("Materializing ARCO frame %s -> %s", remote.url, destination)
-    _write_odim_sri(tmp_path, values, georef, remote.timestamp)
+    _write_odim_dbzh(tmp_path, values, georef, remote.timestamp)
     tmp_path.replace(destination)
     return LocalInputFile(remote.input, remote.timestamp, destination, remote, downloaded=True)
 
 
-def _write_odim_sri(path: Path, values, georef: dict[str, Any], timestamp: datetime) -> None:
-    """Write a minimal ODIM HDF5 the project decoder understands.
+# Marshall-Palmer Z-R relation (Z = a * R^b, Z in mm^6/m^3, R in mm/h). Inverted
+# here to map the ARCO rain rate to reflectivity:
+#   dBZ = 10*log10(Z) = 10*log10(a) + 10*b*log10(R)
+# This is the exact inverse of the rate breakpoints the old SRI rate palette
+# used, so a converted frame colors identically under the shared DBZH palette.
+_ZR_A, _ZR_B = 200.0, 1.6
+
+
+def _write_odim_dbzh(path: Path, values, georef: dict[str, Any], timestamp: datetime) -> None:
+    """Write the ARCO rain-rate frame as a reflectivity (DBZH) ODIM HDF5.
 
     The ARCO ``RR`` field is a precipitation rate in mm/h with NaN outside
-    coverage. We store it with gain=1/offset=0 and a ``nodata`` sentinel for
-    NaN; the ``undetect`` sentinel is left unused (dry 0.0 cells fall below the
-    palette floor and render transparent anyway).
+    coverage. We convert it to reflectivity via Marshall-Palmer so the frame is
+    an ordinary DBZH composite: it then shares the standard decoder, palette,
+    renderer, and (max-merge) compositing with every other product. Cells are
+    encoded with gain=1/offset=0 and ODIM sentinels: NaN (no coverage) -> nodata,
+    dry cells (rate <= 0) -> undetect (render transparent and lose the
+    reflectivity-max to any real echo), wet cells -> their dBZ value.
     """
+
+    import math
 
     import h5py
     import numpy as np
 
     nodata = -9999.0
     undetect = -8888.0
-    data = np.where(np.isfinite(values), values, nodata).astype("float32")
+
+    rr = np.asarray(values, dtype="float32")
+    finite = np.isfinite(rr)
+    wet = finite & (rr > 0.0)
+
+    c0 = 10.0 * math.log10(_ZR_A)
+    c1 = 10.0 * _ZR_B
+    data = np.full(rr.shape, nodata, dtype="float32")
+    data[finite & ~wet] = undetect
+    data[wet] = (c0 + c1 * np.log10(rr[wet])).astype("float32")
 
     with h5py.File(path, "w") as hdf:
         what = hdf.create_group("what")
@@ -143,11 +165,11 @@ def _write_odim_sri(path: Path, values, georef: dict[str, Any], timestamp: datet
         where.attrs["UL_lat"] = float(georef["UL_lat"])
 
         dataset = hdf.create_group("dataset1")
-        dataset.create_group("what").attrs["product"] = "SURF"
+        dataset.create_group("what").attrs["product"] = "COMP"
         data1 = dataset.create_group("data1")
         data1.create_dataset("data", data=data, compression="gzip", compression_opts=4)
         meta = data1.create_group("what")
-        meta.attrs["quantity"] = "RATE"
+        meta.attrs["quantity"] = "DBZH"
         meta.attrs["gain"] = 1.0
         meta.attrs["offset"] = 0.0
         meta.attrs["nodata"] = nodata

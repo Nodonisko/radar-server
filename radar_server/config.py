@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec, Rgba
-from .rendering.palettes import SRI_RATE, STANDARD_DBZH
+from .rendering.palettes import STANDARD_DBZH
 from .rendering.pipeline import (
     DEFAULT_VARIANTS,
     Bounds,
@@ -192,11 +192,6 @@ NO_OXIPNG_RENDER = RenderProfile(optimize=False)
 # Tints the no-coverage (NaN) area with a faint black wash so the radar footprint
 # reads clearly on the map; clear-sky and below-threshold cells stay transparent.
 NODATA_TINT_RENDER = RenderProfile(nodata_fill=Rgba(0, 0, 0, 0.15))
-
-# Surface Rainfall Intensity (precip rate, mm/h) render profile for the Italian
-# DPC ARCO composite. Tints no-coverage cells the same way OPERA products do,
-# while preserving the SRI rate palette.
-SRI_RENDER = RenderProfile(palette=SRI_RATE, nodata_fill=Rgba(0, 0, 0, 0.15))
 
 
 @dataclass(frozen=True)
@@ -547,6 +542,7 @@ HUNGARY_CENTER = GeoCenter(latitude=47.16, longitude=19.5)
 IRELAND_CENTER = GeoCenter(latitude=53.2, longitude=-8.0)
 ICELAND_CENTER = GeoCenter(latitude=64.9, longitude=-18.6)
 ITALY_CENTER = GeoCenter(latitude=42.8, longitude=12.8)
+ITALY_SRI_CENTER = GeoCenter(latitude=41.8, longitude=13.8)
 LATVIA_CENTER = GeoCenter(latitude=56.9, longitude=25.0)
 LITHUANIA_CENTER = GeoCenter(latitude=55.2, longitude=23.9)
 MOLDOVA_CENTER = GeoCenter(latitude=47.2, longitude=28.5)
@@ -588,16 +584,18 @@ opera_dbzh = InputConfig(
     ),
 )
 
-# Italian DPC national radar composite (Surface Rainfall Intensity), pulled from
-# MeteoHub's live ARCO Zarr store. Each frame is materialized locally as an ODIM
-# HDF5 file so it flows through the normal decode/render/forecast pipeline.
+# Italian DPC national radar composite, pulled from MeteoHub's live ARCO Zarr
+# store. The native field is Surface Rainfall Intensity (mm/h), but the
+# materializer converts it to reflectivity (Marshall-Palmer) when writing the
+# ODIM HDF5, so each frame is an ordinary DBZH composite that flows through the
+# standard decode/render/forecast/compose pipeline like every other product.
 it_sri_arco = InputConfig(
     id="it_sri_arco",
-    label="Italy DPC SRI composite (ARCO Zarr)",
+    label="Italy DPC composite (ARCO Zarr)",
     source=arco_radar,
     local_dir=DATA_DIR / "it_sri" / "arco",
-    quantity="RATE",
-    odim_product="SURF",
+    quantity="DBZH",
+    odim_product="COMP",
 )
 
 cz_product = ProductConfig(
@@ -806,33 +804,22 @@ is_product = ProductConfig(
     priority=10,
 )
 
+# Single Italy product: the EUMETNET OPERA composite gap-filled with the denser
+# Italian DPC composite, merged by the standard NaN-aware reflectivity-max
+# (highest dBZ per cell wins). Both inputs are DBZH (the DPC rate is converted at
+# materialization), so this needs no special handling. Uses the DPC/SRI bounds
+# and only renders at timestamps where both inputs are present, so it inherits
+# the slower DPC/ARCO publish latency.
 it_product = ProductConfig(
     id="it",
     label="Italy radar",
-    inputs=inputs(opera_dbzh),
+    inputs=inputs(opera_dbzh, it_sri_arco),
     output_dir=OUTPUT_DIR / "it",
-    geo_bounds=ITALY_BOUNDS,
-    center=ITALY_CENTER,
-    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
-    base_name=timestamped_base("radar_it"),
-    render=NODATA_TINT_RENDER,
-    priority=10,
-)
-
-# Native Italian DPC composite (Surface Rainfall Intensity) from the ARCO Zarr
-# feed. Kept as a separate product/output so it can run alongside (and be
-# compared against) the OPERA-cropped `it` product, or swapped in by editing
-# COUNTRY_PRODUCTS below.
-it_sri_product = ProductConfig(
-    id="it_sri",
-    label="Italy radar (DPC SRI)",
-    inputs=inputs(it_sri_arco),
-    output_dir=OUTPUT_DIR / "it_sri",
     geo_bounds=ITALY_SRI_BOUNDS,
     center=ITALY_CENTER,
     publish_delay_seconds=IT_SRI_PUBLISH_DELAY_SECONDS,
-    base_name=timestamped_base("radar_it_sri"),
-    render=SRI_RENDER,
+    base_name=timestamped_base("radar_it"),
+    render=NODATA_TINT_RENDER,
     priority=10,
 )
 
@@ -1014,7 +1001,6 @@ hu_forecast = ForecastProduct(id="hu_forecast", parent=hu_product, priority=1010
 ie_forecast = ForecastProduct(id="ie_forecast", parent=ie_product, priority=1010)
 is_forecast = ForecastProduct(id="is_forecast", parent=is_product, priority=1010)
 it_forecast = ForecastProduct(id="it_forecast", parent=it_product, priority=1010)
-it_sri_forecast = ForecastProduct(id="it_sri_forecast", parent=it_sri_product, priority=1010)
 lv_forecast = ForecastProduct(id="lv_forecast", parent=lv_product, priority=1010)
 lt_forecast = ForecastProduct(id="lt_forecast", parent=lt_product, priority=1010)
 md_forecast = ForecastProduct(id="md_forecast", parent=md_product, priority=1010)
@@ -1067,7 +1053,6 @@ COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     es_product,
     se_product,
     si_product,
-    it_sri_product,
 )
 COMPOSITE_PRODUCTS: tuple[ProductConfig, ...] = (
     # central_europe_product,
@@ -1104,7 +1089,6 @@ FORECAST_PRODUCTS: tuple[ForecastProduct, ...] = (
     es_forecast,
     se_forecast,
     si_forecast,
-    it_sri_forecast,
     # central_europe_forecast,
 )
 

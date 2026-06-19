@@ -258,16 +258,16 @@
     "id": "it",
     "label": "Italy radar",
     "center": {
-      "latitude": 42.8,
-      "longitude": 12.8
+      "latitude": 41.8,
+      "longitude": 13.8
     },
     "bounds": {
-      "west": 5.59,
-      "south": 37.2,
-      "east": 19.46,
-      "north": 47.81
+      "west": 4.52,
+      "south": 35.06,
+      "east": 20.48,
+      "north": 47.85
     },
-    "publishDelaySeconds": 260
+    "publishDelaySeconds": 480
   },
   {
     "id": "lv",
@@ -448,20 +448,5 @@
       "north": 47.58
     },
     "publishDelaySeconds": 260
-  },
-  {
-    "id": "it_sri",
-    "label": "Italy radar (DPC SRI)",
-    "center": {
-      "latitude": 42.0,
-      "longitude": 12.8
-    },
-    "bounds": {
-      "west": 4.52,
-      "south": 35.06,
-      "east": 20.48,
-      "north": 47.85
-    },
-    "publishDelaySeconds": 480
   }
 ]

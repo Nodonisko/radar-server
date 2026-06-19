@@ -206,17 +206,24 @@ MQTT / polling (main thread, networking only)
 - OPERA live updates use MQTT topic:
   `ORD/eu.eumetnet/0-20010-0-OPERA/DBZH`.
 - API key is sent as header `apikey`.
-- Italy (`it_sri`) uses the MeteoHub ARCO Zarr store (`radar.zarr`, variable
-  `RR`), read over HTTP with basic auth (`ARCO_USERNAME` + `ARCO_ACCESS_KEY`).
-  The data frontier is the store's `last_valid` attribute; each frame is one
-  Zarr chunk, decompressed (Blosc, via `numcodecs`) and materialized locally as
-  an ODIM HDF5 file so it flows through the normal decode/render/forecast path.
-  This is Surface Rainfall Intensity (`RATE`, mm/h), rendered with the `sri_rate`
-  palette — not reflectivity. There is no MQTT feed, so it is polled (no ORD
-  quota applies to ARCO object reads): baseline every 2 min, with gentle 60s
-  quick checks once a new frame is expected (frames publish ~7-8 min after their
-  valid time). The OPERA-cropped `it` product is kept alongside `it_sri` so the
-  two can be compared or switched in `COUNTRY_PRODUCTS`.
+- The Italian DPC composite uses the MeteoHub ARCO Zarr store (`radar.zarr`,
+  variable `RR`), read over HTTP with basic auth (`ARCO_USERNAME` +
+  `ARCO_ACCESS_KEY`). The data frontier is the store's `last_valid` attribute;
+  each frame is one Zarr chunk, decompressed (Blosc, via `numcodecs`) and
+  materialized locally as an ODIM HDF5 file so it flows through the normal
+  decode/render/forecast path. The native field is Surface Rainfall Intensity
+  (mm/h), but the materializer converts it to reflectivity (`DBZH`) via the
+  Marshall-Palmer Z-R relation when writing the HDF5, so it is an ordinary
+  reflectivity composite rendered with the standard `dbzh` palette — no special
+  palette or render path. There is no MQTT feed, so it is polled (no ORD quota
+  applies to ARCO object reads): baseline every 2 min, with gentle 60s quick
+  checks once a new frame is expected (frames publish ~7-8 min after their valid
+  time).
+- The single `it` product gap-fills the EUMETNET OPERA composite with the denser
+  Italian DPC composite via the standard reflectivity-max composite (highest dBZ
+  per cell wins), over the DPC/SRI bounds. Because both inputs are `DBZH`, the
+  composite needs no special handling; `it` only renders at timestamps where both
+  inputs are present, so it inherits the slower DPC/ARCO publish latency.
 
 ## Backfill
 
