@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
-from .rendering.core import PaletteSpec
+from .rendering.core import PaletteSpec, Rgba
 from .rendering.palettes import STANDARD_DBZH
 from .rendering.pipeline import (
     DEFAULT_VARIANTS,
@@ -132,6 +132,7 @@ class SingleFileRenderer(Protocol):
         base: str,
         variants: Sequence[VariantSpec] = DEFAULT_VARIANTS,
         optimize: bool = True,
+        nodata_fill: Rgba | None = None,
         on_output_ready: OutputReadyCallback | None = None,
     ) -> RenderResult: ...
 
@@ -147,6 +148,7 @@ class CompositeRenderer(Protocol):
         bounds: Bounds | None = None,
         variants: Sequence[VariantSpec] = DEFAULT_VARIANTS,
         optimize: bool = True,
+        nodata_fill: Rgba | None = None,
         on_output_ready: OutputReadyCallback | None = None,
     ) -> RenderResult: ...
 
@@ -171,9 +173,17 @@ class RenderProfile:
     palette: PaletteSpec = STANDARD_DBZH
     variants: tuple[VariantSpec, ...] = DEFAULT_VARIANTS
     optimize: bool = True
+    # Fill for missing-data (NaN) cells. None leaves them fully transparent (the
+    # default); set e.g. Rgba(0, 0, 0, 0.15) to tint the area outside radar
+    # coverage. Clear-sky/below-threshold cells stay transparent either way.
+    nodata_fill: Rgba | None = None
 
 
 NO_OXIPNG_RENDER = RenderProfile(optimize=False)
+
+# Tints the no-coverage (NaN) area with a faint black wash so the radar footprint
+# reads clearly on the map; clear-sky and below-threshold cells stay transparent.
+NODATA_TINT_RENDER = RenderProfile(nodata_fill=Rgba(0, 0, 0, 0.15))
 
 
 @dataclass(frozen=True)
@@ -367,6 +377,10 @@ class ForecastProduct:
     @property
     def optimize(self) -> bool:
         return self.parent.render.optimize
+
+    @property
+    def nodata_fill(self) -> Rgba | None:
+        return self.parent.render.nodata_fill
 
     @property
     def retention(self) -> RetentionPolicy:
@@ -598,6 +612,7 @@ gr_product = ProductConfig(
     output_dir=OUTPUT_DIR / "gr",
     geo_bounds=GREECE_BOUNDS,
     base_name=timestamped_base("radar_gr"),
+    render=NODATA_TINT_RENDER,
     priority=10,
 )
 
@@ -648,6 +663,7 @@ it_product = ProductConfig(
     output_dir=OUTPUT_DIR / "it",
     geo_bounds=ITALY_BOUNDS,
     base_name=timestamped_base("radar_it"),
+    render=NODATA_TINT_RENDER,
     priority=10,
 )
 
@@ -678,6 +694,7 @@ md_product = ProductConfig(
     output_dir=OUTPUT_DIR / "md",
     geo_bounds=MOLDOVA_BOUNDS,
     base_name=timestamped_base("radar_md"),
+    render=NODATA_TINT_RENDER,
     priority=10,
 )
 

@@ -84,6 +84,38 @@ def _parse_hex(color: str) -> Tuple[int, int, int]:
 
 
 @dataclass(frozen=True)
+class Rgba:
+    """A solid color plus an alpha, used for special-cell fills (e.g. nodata).
+
+    ``r``/``g``/``b`` are 0-255 channels and ``a`` is opacity in ``[0.0, 1.0]``
+    (matching CSS ``rgba(...)``). Stored separately from :class:`PaletteSpec`
+    colors because palette entries are always opaque; only the fill for
+    missing-data cells carries partial transparency.
+    """
+
+    r: int
+    g: int
+    b: int
+    a: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name, channel in (("r", self.r), ("g", self.g), ("b", self.b)):
+            if not 0 <= channel <= 255:
+                raise ValueError(f"Rgba {name} must be 0-255, got {channel}")
+        if not 0.0 <= self.a <= 1.0:
+            raise ValueError(f"Rgba alpha must be in [0.0, 1.0], got {self.a}")
+
+    @property
+    def rgb(self) -> Tuple[int, int, int]:
+        return (self.r, self.g, self.b)
+
+    @property
+    def alpha_byte(self) -> int:
+        """Alpha as an 8-bit value for the PNG ``tRNS`` chunk."""
+        return round(self.a * 255)
+
+
+@dataclass(frozen=True)
 class PaletteSpec:
     """A step colormap bound to a physical quantity.
 

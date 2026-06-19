@@ -1,7 +1,10 @@
 """Encode an :class:`IndexedImage` to an optimized PNG.
 
-The image is written as a paletted PNG with a single transparent index, then
-optionally crushed with oxipng. Output dimensions equal the grid size exactly.
+The image is written as a paletted PNG, then optionally crushed with oxipng.
+Output dimensions equal the grid size exactly. Transparency is a single fully
+transparent palette index, unless the image also carries a partially
+transparent ``nodata`` slot, in which case a full per-index alpha (``tRNS``)
+table is emitted instead.
 """
 
 from __future__ import annotations
@@ -119,8 +122,25 @@ def _to_pil(image: IndexedImage) -> Image.Image:
     for rgb in image.palette:
         flat.extend(rgb)
     flat.extend((0, 0, 0))  # transparent index slot
+    if image.nodata_index is not None and image.nodata_rgba is not None:
+        flat.extend(image.nodata_rgba[:3])  # partially transparent nodata slot
     img.putpalette(flat)
     return img
+
+
+def _transparency(image: IndexedImage) -> int | bytes:
+    """PIL ``transparency`` arg: a single index, or per-index alpha bytes.
+
+    With no nodata fill we keep the single-index form so output stays identical
+    to the historical encoder. With a nodata fill we emit a full ``tRNS`` table:
+    opaque palette colors, a fully transparent slot, and the nodata slot's alpha.
+    """
+    if image.nodata_index is None or image.nodata_rgba is None:
+        return image.transparent_index
+    alpha = bytearray([255] * len(image.palette))
+    alpha.append(0)  # transparent_index: fully transparent
+    alpha.append(image.nodata_rgba[3])  # nodata_index: partial alpha
+    return bytes(alpha)
 
 
 def write_png(
@@ -140,7 +160,7 @@ def write_png(
     tmp = path.with_suffix(".tmp.png")
     try:
         step_start = time.perf_counter()
-        img.save(tmp, format="PNG", transparency=image.transparent_index, optimize=False)
+        img.save(tmp, format="PNG", transparency=_transparency(image), optimize=False)
         if timings is not None:
             timings.save += time.perf_counter() - step_start
         if optimize:

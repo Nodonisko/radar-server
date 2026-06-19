@@ -22,7 +22,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .colorize import colorize
 from .composite import composite_to_web_mercator
-from .core import PaletteSpec, RadarField
+from .core import PaletteSpec, RadarField, Rgba
 from .decode import load_odim_hdf
 from .downsample import downsample_max
 from .encode import PngWriteTimings, write_png
@@ -105,6 +105,7 @@ def _emit(
     sources: Sequence[str],
     timings: _EmitTimings,
     metadata_bounds: Bounds | None = None,
+    nodata_fill: Rgba | None = None,
     on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Shared tail: downsample -> colorize -> write PNG variants and sidecar."""
@@ -123,7 +124,7 @@ def _emit(
         timings.downsample += time.perf_counter() - step_start
 
         step_start = time.perf_counter()
-        image = colorize(variant_field, palette)
+        image = colorize(variant_field, palette, nodata_fill=nodata_fill)
         timings.colorize += time.perf_counter() - step_start
 
         path = output_dir / f"{base}_{name}.png"
@@ -178,12 +179,15 @@ def render_radar_png(
     base: str,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
+    nodata_fill: Rgba | None = None,
     on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Render one HDF5 file to lossless Web Mercator overlay PNG(s).
 
     ``base`` is the output filename stem, chosen by the caller. The renderer is
     naming-agnostic; the data timestamp is recorded in the sidecar, not the name.
+    ``nodata_fill`` tints missing-data (NaN) cells instead of leaving them fully
+    transparent (clear-sky/below-floor cells stay transparent regardless).
     """
     total_start = time.perf_counter()
 
@@ -205,6 +209,7 @@ def render_radar_png(
         optimize,
         sources=[hdf_path.name],
         timings=emit_timings,
+        nodata_fill=nodata_fill,
         on_output_ready=on_output_ready,
     )
     _log_render_performance(
@@ -230,6 +235,7 @@ def render_composite_png(
     bounds: Optional[Bounds] = None,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
+    nodata_fill: Rgba | None = None,
     on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Merge multiple HDF5 files into one overlay PNG (+ variants).
@@ -237,6 +243,8 @@ def render_composite_png(
     All inputs must share a timestamp. ``bounds`` (WGS84 ``west, south, east,
     north``) crops/extends the output; ``None`` uses the union of all inputs.
     ``base`` is the full output filename stem, supplied by the caller.
+    ``nodata_fill`` tints missing-data (NaN) cells instead of leaving them fully
+    transparent.
     """
     paths = list(hdf_paths)
     if not paths:
@@ -263,6 +271,7 @@ def render_composite_png(
         sources=[p.name for p in paths],
         timings=emit_timings,
         metadata_bounds=bounds,
+        nodata_fill=nodata_fill,
         on_output_ready=on_output_ready,
     )
     _log_render_performance(
@@ -286,6 +295,7 @@ def render_batch(
     *,
     variants: Sequence[Tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
+    nodata_fill: Rgba | None = None,
 ) -> List[RenderResult]:
     """Render many files concurrently. ``items`` is ``(hdf_path, base)`` pairs.
 
@@ -305,7 +315,16 @@ def render_batch(
     results: List[RenderResult] = []
     with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(items))) as pool:
         futures = {
-            pool.submit(render_radar_png, path, output_dir, palette, base=base, variants=variants, optimize=optimize): (path, base)
+            pool.submit(
+                render_radar_png,
+                path,
+                output_dir,
+                palette,
+                base=base,
+                variants=variants,
+                optimize=optimize,
+                nodata_fill=nodata_fill,
+            ): (path, base)
             for path, base in items
         }
         for future in as_completed(futures):

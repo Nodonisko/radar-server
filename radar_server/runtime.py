@@ -313,6 +313,7 @@ def run_forecasts_once(
                 minute=minute,
                 variants=forecast.render_variants,
                 optimize=forecast.optimize,
+                nodata_fill=forecast.nodata_fill,
                 on_output_ready=on_output_ready,
             )
             rendered += 1

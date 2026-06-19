@@ -72,7 +72,7 @@ class _ManualExecutor:
 def _fake_pipeline(calls: list, *, fail_bases: set[str] | None = None) -> RenderPipeline:
     failing = fail_bases or set()
 
-    def render_single(hdf_path, output_dir, palette, *, base, variants=(), optimize=True, on_output_ready=None):  # noqa: ANN001
+    def render_single(hdf_path, output_dir, palette, *, base, variants=(), optimize=True, nodata_fill=None, on_output_ready=None):  # noqa: ANN001
         raise AssertionError("single renderer should not be used when bounds are set")
 
     def render_composite(  # noqa: ANN001
@@ -84,6 +84,7 @@ def _fake_pipeline(calls: list, *, fail_bases: set[str] | None = None) -> Render
         bounds=None,
         variants=(),
         optimize=True,
+        nodata_fill=None,
         on_output_ready=None,
     ):
         if base in failing:

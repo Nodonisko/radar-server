@@ -219,6 +219,7 @@ class RenderWorker(_QueueWorker):
             variants=forecast.render_variants,
             optimize=forecast.optimize,
             bounds=bounds_tuple(forecast.geo_bounds),
+            nodata_fill=forecast.nodata_fill,
             on_output_ready=self._on_output_ready,
         )
 

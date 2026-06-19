@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
-from .core import PaletteSpec, RadarField
+from .core import PaletteSpec, RadarField, Rgba
 from .pipeline import DEFAULT_VARIANTS, Bounds, OutputReadyCallback, RenderResult, _EmitTimings, _emit
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ def render_forecast_field(
     variants: Sequence[tuple[str, float]] = DEFAULT_VARIANTS,
     optimize: bool = True,
     bounds: Bounds | None = None,
+    nodata_fill: Rgba | None = None,
     on_output_ready: OutputReadyCallback | None = None,
 ) -> RenderResult:
     """Render one forecast lead frame to PNG variants plus its JSON sidecar."""
@@ -44,6 +45,7 @@ def render_forecast_field(
         sources=[source],
         timings=emit_timings,
         metadata_bounds=bounds,
+        nodata_fill=nodata_fill,
         on_output_ready=on_output_ready,
     )
     _log_forecast_emit_performance(base=base, result=result, field=field, emit=emit_timings)

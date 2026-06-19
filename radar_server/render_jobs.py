@@ -94,6 +94,7 @@ def render_job(
             base=base,
             variants=render.variants,
             optimize=render.optimize,
+            nodata_fill=render.nodata_fill,
             on_output_ready=on_output_ready,
         )
     return render.pipeline.render_composite(
@@ -104,6 +105,7 @@ def render_job(
         bounds=bounds,
         variants=render.variants,
         optimize=render.optimize,
+        nodata_fill=render.nodata_fill,
         on_output_ready=on_output_ready,
     )
 

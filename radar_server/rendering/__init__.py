@@ -5,6 +5,7 @@ Public entry points: :func:`render_radar_png`, :func:`render_composite_png`,
 (decode → reproject → downsample → colorize → encode).
 """
 
+from .core import Rgba
 from .palettes import EXTENDED_DBZH, PALETTES, STANDARD_DBZH
 from .pipeline import RenderResult, render_batch, render_composite_png, render_radar_png
 
@@ -13,6 +14,7 @@ __all__ = [
     "render_composite_png",
     "render_batch",
     "RenderResult",
+    "Rgba",
     "STANDARD_DBZH",
     "EXTENDED_DBZH",
     "PALETTES",

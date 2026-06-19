@@ -10,7 +10,8 @@ sibling packages under `radar_server/`.
 - Lossless output resolution computed per file (finest native cell).
 - Smaller variants via max-pooling (fractional factors supported).
 - Composites: merge N HDF5 files into one PNG, custom or union bounds, max overlap.
-- Paletted PNGs (one transparent index) + oxipng.
+- Paletted PNGs (one transparent index) + oxipng; optional partially transparent
+  fill for missing-data (NaN) cells via `nodata_fill`.
 
 ## Pipeline
 
@@ -88,5 +89,8 @@ tests use the committed OPERA fixtures and compare renders against PNG snapshots
   (error otherwise); the caller supplies the full filename `base`.
 
 - **Sentinels:** nodata → `NaN`, clear-sky (`undetect`) → `-inf`; both render
-  transparent regardless of palette floor.
+  transparent regardless of palette floor. The two stay distinguishable so a
+  product can opt into a partially transparent `nodata_fill` (e.g.
+  `Rgba(0, 0, 0, 0.15)`) that tints only the NaN no-coverage cells while
+  clear-sky and below-floor cells remain fully transparent.
 

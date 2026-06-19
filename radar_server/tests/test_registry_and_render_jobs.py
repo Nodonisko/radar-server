@@ -175,6 +175,7 @@ def test_render_job_uses_composite_renderer_when_bounds_are_set(tmp_path: Path) 
         bounds=None,
         variants=(),
         optimize=True,
+        nodata_fill=None,
         on_output_ready=None,
     ):
         calls.append(
@@ -186,6 +187,7 @@ def test_render_job_uses_composite_renderer_when_bounds_are_set(tmp_path: Path) 
                 "bounds": bounds,
                 "variants": tuple(variants),
                 "optimize": optimize,
+                "nodata_fill": nodata_fill,
             }
         )
         return RenderResult(base=base, variants={}, sidecar=output_dir / f"{base}.json", bounds=bounds)

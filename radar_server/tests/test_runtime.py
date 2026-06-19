@@ -39,7 +39,7 @@ class _InlineExecutor:
 
 
 def _fake_pipeline(calls: list) -> RenderPipeline:
-    def render_single(hdf_path, output_dir, palette, *, base, variants=(), optimize=True, on_output_ready=None):  # noqa: ANN001
+    def render_single(hdf_path, output_dir, palette, *, base, variants=(), optimize=True, nodata_fill=None, on_output_ready=None):  # noqa: ANN001
         raise AssertionError("single renderer should not be used when bounds are set")
 
     def render_composite(  # noqa: ANN001
@@ -51,6 +51,7 @@ def _fake_pipeline(calls: list) -> RenderPipeline:
         bounds=None,
         variants=(),
         optimize=True,
+        nodata_fill=None,
         on_output_ready=None,
     ):
         calls.append(base)
