@@ -12,12 +12,11 @@ from radar_server.config import RetentionPolicy, cz_maxz, it_sri_arco
 from radar_server.fetching import (
     RemoteInputFile,
     SkippableFetchError,
-    _discover_arco,
-    _download_arco_frame,
     download_remote_file,
     sync_input,
 )
 from radar_server.rendering.decode import load_odim_hdf
+from radar_server.sources import arco
 
 
 _FAKE_GEOREF = {
@@ -54,11 +53,11 @@ def test_discover_arco_enumerates_frontier_backwards(monkeypatch, tmp_path) -> N
     axis = np.array(
         ["2026-06-19T17:50", "2026-06-19T17:55", "2026-06-19T18:00"], dtype="datetime64[m]"
     )
-    monkeypatch.setattr(fetching, "_arco_auth", lambda source: ("user", "key"))
-    monkeypatch.setattr(fetching, "_arco_metadata", lambda source, auth: _fake_metadata("2026-06-19T18:00"))
-    monkeypatch.setattr(fetching, "_arco_time_axis", lambda source, auth: axis)
+    monkeypatch.setattr(arco, "_arco_auth", lambda source: ("user", "key"))
+    monkeypatch.setattr(arco, "_arco_metadata", lambda source, auth: _fake_metadata("2026-06-19T18:00"))
+    monkeypatch.setattr(arco, "_arco_time_axis", lambda source, auth: axis)
 
-    files = _discover_arco(input_config, input_config.source, now=None, limit=2)
+    files = arco.discover(input_config, input_config.source, now=None, limit=2)
 
     assert [f.timestamp for f in files] == [datetime(2026, 6, 19, 18, 0), datetime(2026, 6, 19, 17, 55)]
     assert files[0].url.endswith("/RR/2.0.0")
@@ -70,8 +69,8 @@ def test_discover_arco_enumerates_frontier_backwards(monkeypatch, tmp_path) -> N
 def test_download_arco_frame_writes_decodable_odim(monkeypatch, tmp_path) -> None:
     values = np.array([[0.0, 2.5, np.nan], [np.nan, 10.0, 0.0]], dtype="<f4")
     encoded = Blosc().encode(values.tobytes())
-    monkeypatch.setattr(fetching, "_arco_auth", lambda source: ("user", "key"))
-    monkeypatch.setattr(fetching, "_arco_get", lambda url, auth: SimpleNamespace(content=encoded))
+    monkeypatch.setattr(arco, "_arco_auth", lambda source: ("user", "key"))
+    monkeypatch.setattr(arco, "_arco_get", lambda url, auth: SimpleNamespace(content=encoded))
 
     input_config = replace(it_sri_arco, local_dir=tmp_path)
     remote = RemoteInputFile(
@@ -82,7 +81,7 @@ def test_download_arco_frame_writes_decodable_odim(monkeypatch, tmp_path) -> Non
         metadata={"arco_index": 2, "arco_georef": _FAKE_GEOREF, "arco_dtype": "<f4"},
     )
 
-    local = _download_arco_frame(remote, tmp_path / remote.filename)
+    local = arco.download_frame(remote, tmp_path / remote.filename)
 
     assert local.downloaded is True
     field = load_odim_hdf(local.path, quantity="RATE")
@@ -117,8 +116,8 @@ def test_sync_input_skips_missing_arco_chunk(monkeypatch, tmp_path) -> None:
 def test_download_remote_file_dispatches_arco(monkeypatch, tmp_path) -> None:
     values = np.zeros((2, 3), dtype="<f4")
     encoded = Blosc().encode(values.tobytes())
-    monkeypatch.setattr(fetching, "_arco_auth", lambda source: ("user", "key"))
-    monkeypatch.setattr(fetching, "_arco_get", lambda url, auth: SimpleNamespace(content=encoded))
+    monkeypatch.setattr(arco, "_arco_auth", lambda source: ("user", "key"))
+    monkeypatch.setattr(arco, "_arco_get", lambda url, auth: SimpleNamespace(content=encoded))
     input_config = replace(it_sri_arco, local_dir=tmp_path)
     remote = RemoteInputFile(
         input=input_config,

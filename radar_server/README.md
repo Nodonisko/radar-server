@@ -122,7 +122,7 @@ This generates `products.json` based on the current configuration.
 
 ```text
 config
-  -> fetching.py
+  -> fetching.py (orchestration) -> sources/ (per-source discover/download)
   -> input_index.py
   -> queueing.py / workers.py
   -> render_jobs.py
