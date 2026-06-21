@@ -499,7 +499,6 @@ DENMARK_BOUNDS = GeoBounds(west=6.82, south=54.08, east=12.26, north=58.47)
 ESTONIA_BOUNDS = GeoBounds(west=22.02, south=56.80, east=29.59, north=60.39)
 FINLAND_BOUNDS = GeoBounds(west=18.62, south=59.09, east=33.14, north=70.79)
 FRANCE_BOUNDS = GeoBounds(west=-5.87, south=41.61, east=9.29, north=51.81)
-GREECE_BOUNDS = GeoBounds(west=19.07, south=35.67, east=27.59, north=42.47)
 CROATIA_BOUNDS = GeoBounds(west=12.48, south=42.22, east=20.43, north=47.27)
 HUNGARY_BOUNDS = GeoBounds(west=15.05, south=45.02, east=23.95, north=49.29)
 IRELAND_BOUNDS = GeoBounds(west=-11.65, south=50.73, east=-4.80, north=56.10)
@@ -536,12 +535,11 @@ ESTONIA_CENTER = GeoCenter(latitude=58.6, longitude=25.0)
 FINLAND_CENTER = GeoCenter(latitude=63.0, longitude=26.0)
 FRANCE_CENTER = GeoCenter(latitude=46.6, longitude=2.5)
 UNITED_KINGDOM_CENTER = GeoCenter(latitude=53.5, longitude=-2.5)
-GREECE_CENTER = GeoCenter(latitude=39.5, longitude=22.0)
 CROATIA_CENTER = GeoCenter(latitude=45.1, longitude=15.5)
 HUNGARY_CENTER = GeoCenter(latitude=47.16, longitude=19.5)
 IRELAND_CENTER = GeoCenter(latitude=53.2, longitude=-8.0)
 ICELAND_CENTER = GeoCenter(latitude=64.9, longitude=-18.6)
-ITALY_CENTER = GeoCenter(latitude=42.8, longitude=12.8)
+ITALY_CENTER = GeoCenter(latitude=42.9, longitude=12.3)
 ITALY_SRI_CENTER = GeoCenter(latitude=41.8, longitude=13.8)
 LATVIA_CENTER = GeoCenter(latitude=56.9, longitude=25.0)
 LITHUANIA_CENTER = GeoCenter(latitude=55.2, longitude=23.9)
@@ -740,19 +738,6 @@ gb_product = ProductConfig(
     center=UNITED_KINGDOM_CENTER,
     publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_gb"),
-    priority=10,
-)
-
-gr_product = ProductConfig(
-    id="gr",
-    label="Greece radar",
-    inputs=inputs(opera_dbzh),
-    output_dir=OUTPUT_DIR / "gr",
-    geo_bounds=GREECE_BOUNDS,
-    center=GREECE_CENTER,
-    publish_delay_seconds=DEFAULT_PUBLISH_DELAY_SECONDS,
-    base_name=timestamped_base("radar_gr"),
-    render=NODATA_TINT_RENDER,
     priority=10,
 )
 
@@ -995,7 +980,6 @@ ee_forecast = ForecastProduct(id="ee_forecast", parent=ee_product, priority=1010
 fi_forecast = ForecastProduct(id="fi_forecast", parent=fi_product, priority=1010)
 fr_forecast = ForecastProduct(id="fr_forecast", parent=fr_product, priority=1010)
 gb_forecast = ForecastProduct(id="gb_forecast", parent=gb_product, priority=1010)
-gr_forecast = ForecastProduct(id="gr_forecast", parent=gr_product, priority=1010)
 hr_forecast = ForecastProduct(id="hr_forecast", parent=hr_product, priority=1010)
 hu_forecast = ForecastProduct(id="hu_forecast", parent=hu_product, priority=1010)
 ie_forecast = ForecastProduct(id="ie_forecast", parent=ie_product, priority=1010)
@@ -1035,7 +1019,6 @@ COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     fi_product,
     fr_product,
     gb_product,
-    gr_product,
     hr_product,
     hu_product,
     ie_product,
@@ -1071,7 +1054,6 @@ FORECAST_PRODUCTS: tuple[ForecastProduct, ...] = (
     fi_forecast,
     fr_forecast,
     gb_forecast,
-    gr_forecast,
     hr_forecast,
     hu_forecast,
     ie_forecast,
