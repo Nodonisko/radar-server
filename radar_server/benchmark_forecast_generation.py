@@ -29,7 +29,7 @@ from .forecast_generation import (
     generate_forecast_fields,
     generate_layered_forecast_fields,
     load_history_fields,
-    load_layered_history_pairs,
+    load_layered_history,
 )
 from .logging_config import configure_logging
 from .queueing import ForecastGenTask, HistoryFrame
@@ -68,13 +68,12 @@ def main() -> int:
         history=tuple(HistoryFrame(frame.timestamp, frame.paths) for frame in frames),
     )
 
-    fields, load_seconds = _timed_load(task)
-    _validate_fields(fields)
+    loaded, load_seconds = _timed_load(task)
+    _validate_fields(loaded.fields)
 
     options = dict(
         minutes=minutes,
         method=args.method,
-        floor_level=forecast.palette.levels[0],
         motion_grid_step=motion_grid_step,
         motion_grid_max=motion_grid_max,
         fast_idw=fast_idw,
@@ -83,7 +82,7 @@ def main() -> int:
         warp_grid_step=warp_grid_step,
     )
     runs = _run_benchmark(
-        fields,
+        loaded,
         options=options,
         warmups=args.warmups,
         iterations=args.iterations,
@@ -94,7 +93,7 @@ def main() -> int:
 
     summary = _summarize(
         frames=frames,
-        fields=fields,
+        fields=loaded.fields,
         forecast=forecast,
         options=options,
         warmups=args.warmups,
@@ -312,14 +311,29 @@ def _scan_input_paths(input_config: InputConfig) -> dict[datetime, tuple[Path, .
     return {timestamp: tuple(sorted(paths)) for timestamp, paths in grouped.items()}
 
 
-def _timed_load(task: ForecastGenTask) -> tuple[list[RadarField], float]:
+@dataclass(frozen=True)
+class _LoadedHistory:
+    """Pre-decoded history consumed by the timed generate step.
+
+    ``fields`` drives motion (the overlay history for layered forecasts);
+    ``base_latest`` is set only for layered forecasts.
+    """
+
+    fields: list[RadarField]
+    base_latest: RadarField | None = None
+
+
+def _timed_load(task: ForecastGenTask) -> tuple[_LoadedHistory, float]:
     start = time.perf_counter()
+    loaded = _load_history(task)
+    return loaded, time.perf_counter() - start
+
+
+def _load_history(task: ForecastGenTask) -> _LoadedHistory:
     if task.forecast.layered:
-        _base_history, overlay_history = load_layered_history_pairs(task)
-        fields = overlay_history
-    else:
-        fields = load_history_fields(task)
-    return fields, time.perf_counter() - start
+        overlay_history, base_latest = load_layered_history(task)
+        return _LoadedHistory(fields=overlay_history, base_latest=base_latest)
+    return _LoadedHistory(fields=load_history_fields(task))
 
 
 def _validate_fields(fields: Sequence[RadarField]) -> None:
@@ -332,7 +346,7 @@ def _validate_fields(fields: Sequence[RadarField]) -> None:
 
 
 def _run_benchmark(
-    fields: Sequence[RadarField],
+    loaded: _LoadedHistory,
     *,
     options: dict[str, Any],
     warmups: int,
@@ -348,7 +362,7 @@ def _run_benchmark(
 
     benchmarked = _load_and_generate if include_load else _generate
     for _ in range(warmups):
-        benchmarked(task, fields, options)
+        benchmarked(task, loaded, options)
 
     was_enabled = gc.isenabled()
     if disable_gc:
@@ -357,7 +371,7 @@ def _run_benchmark(
         runs: list[float] = []
         for _ in range(iterations):
             start = time.perf_counter()
-            benchmarked(task, fields, options)
+            benchmarked(task, loaded, options)
             runs.append(time.perf_counter() - start)
         return runs
     finally:
@@ -367,38 +381,31 @@ def _run_benchmark(
 
 def _generate(
     task: ForecastGenTask,
-    fields: Sequence[RadarField],
+    loaded: _LoadedHistory,
     options: dict[str, Any],
-) -> dict[int, RadarField]:
+) -> dict:
     if task.forecast.layered:
-        base_history, overlay_history = load_layered_history_pairs(task)
         return generate_layered_forecast_fields(
-            overlay_history,
-            base_history[-1],
-            overlay_history[-1],
+            loaded.fields,
+            loaded.base_latest,
             forecast_id=task.forecast.id,
             **options,
         )
-    return generate_forecast_fields(fields, forecast_id=task.forecast.id, **options)
+    return generate_forecast_fields(
+        loaded.fields,
+        forecast_id=task.forecast.id,
+        floor_level=task.forecast.palette.levels[0],
+        **options,
+    )
 
 
 def _load_and_generate(
     task: ForecastGenTask,
-    fields: Sequence[RadarField],
+    loaded: _LoadedHistory,
     options: dict[str, Any],
-) -> dict[int, RadarField]:
-    del fields
-    if task.forecast.layered:
-        base_history, overlay_history = load_layered_history_pairs(task)
-        return generate_layered_forecast_fields(
-            overlay_history,
-            base_history[-1],
-            overlay_history[-1],
-            forecast_id=task.forecast.id,
-            **options,
-        )
-    loaded = load_history_fields(task)
-    return generate_forecast_fields(loaded, forecast_id=task.forecast.id, **options)
+) -> dict:
+    del loaded
+    return _generate(task, _load_history(task), options)
 
 
 def _summarize(

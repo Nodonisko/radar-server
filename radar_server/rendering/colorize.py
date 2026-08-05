@@ -60,7 +60,6 @@ def colorize(
 
     transparent_index = ncolors
     indices = idx.astype(np.uint8)
-    palette_alphas = palette.alpha_bytes
 
     if nodata_fill is None:
         # Default: missing data and below-floor both fully transparent.
@@ -69,7 +68,6 @@ def colorize(
             indices=indices,
             palette=palette.rgb,
             transparent_index=transparent_index,
-            palette_alphas=palette_alphas,
         )
 
     # Missing-data cells get their own partially transparent fill; clear-sky and
@@ -83,5 +81,4 @@ def colorize(
         transparent_index=transparent_index,
         nodata_index=nodata_index,
         nodata_rgba=(nodata_fill.r, nodata_fill.g, nodata_fill.b, nodata_fill.alpha_byte),
-        palette_alphas=palette_alphas,
     )

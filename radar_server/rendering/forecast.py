@@ -1,9 +1,10 @@
 """Render precomputed forecast fields to PNG variants.
 
 The compute half (pysteps motion + extrapolation) lives in
-``radar_server.forecast_generation``; this module only emits a ready
-:class:`RadarField` through the shared downsample/colorize/encode tail, so a
-forecast frame renders exactly like an observed frame minus decode/reproject.
+``radar_server.forecast_generation``; this module only emits a ready frame
+(a :class:`RadarField`, or a layered base+overlay pair) through the shared
+downsample/colorize/encode tail, so a forecast frame renders exactly like an
+observed frame minus decode/reproject.
 """
 
 from __future__ import annotations
@@ -12,14 +13,22 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
-from .core import PaletteSpec, RadarField, Rgba
-from .pipeline import DEFAULT_VARIANTS, Bounds, OutputReadyCallback, RenderResult, _EmitTimings, _emit
+from .core import PaletteSpec, Rgba
+from .pipeline import (
+    DEFAULT_VARIANTS,
+    Bounds,
+    EmitTimings,
+    Frame,
+    OutputReadyCallback,
+    RenderResult,
+    emit_frame,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 
 def render_forecast_field(
-    field: RadarField,
+    field: Frame,
     output_dir: Path,
     palette: PaletteSpec,
     *,
@@ -33,9 +42,9 @@ def render_forecast_field(
 ) -> RenderResult:
     """Render one forecast lead frame to PNG variants plus its JSON sidecar."""
 
-    emit_timings = _EmitTimings()
+    emit_timings = EmitTimings()
     source = f"forecast_{minute}m" if minute is not None else f"forecast_{base}"
-    result = _emit(
+    result = emit_frame(
         field,
         output_dir,
         palette,
@@ -56,8 +65,8 @@ def _log_forecast_emit_performance(
     *,
     base: str,
     result: RenderResult,
-    field: RadarField,
-    emit: _EmitTimings,
+    field: Frame,
+    emit: EmitTimings,
 ) -> None:
     LOGGER.info(
         (

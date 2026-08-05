@@ -21,10 +21,11 @@ from radar_server.forecast_generation import (
     generate_for_task,
     generate_forecast_fields,
     generate_layered_forecast_fields,
+    load_layered_history,
 )
 from radar_server.queueing import ForecastGenTask, HistoryFrame
 from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField
-from radar_server.rendering.layered import OVERLAY_VALUE_OFFSET
+from radar_server.rendering.layered import LayeredFrame
 
 
 def _field(values: np.ndarray, timestamp: datetime) -> RadarField:
@@ -261,20 +262,142 @@ def test_generate_for_task_routes_layered_parent(monkeypatch, tmp_path: Path) ->
         history=(HistoryFrame(timestamp=issue, paths=(tmp_path / "a.hdf", tmp_path / "b.hdf")),),
     )
     captured: dict = {}
+    overlay_history = [
+        _field(np.zeros((2, 2)), issue - timedelta(minutes=5)),
+        _field(np.zeros((2, 2)), issue),
+    ]
+    base_latest = _field(np.zeros((2, 2)), issue)
 
-    def fake_layered(load_task):  # noqa: ANN001
+    def fake_load_layered(load_task):  # noqa: ANN001
         captured["layered_task"] = load_task
+        return overlay_history, base_latest
+
+    def fake_generate_layered(history, base, *, minutes, **kwargs):  # noqa: ANN001, ANN003
+        captured["history"] = history
+        captured["base"] = base
+        captured["minutes"] = minutes
+        captured.update(kwargs)
         return {10: _field(np.zeros((2, 2)), issue)}
 
-    monkeypatch.setattr(forecast_generation, "generate_layered_for_task", fake_layered)
+    monkeypatch.setattr(forecast_generation, "load_layered_history", fake_load_layered)
+    monkeypatch.setattr(forecast_generation, "generate_layered_forecast_fields", fake_generate_layered)
 
     result = generate_for_task(task)
 
     assert captured["layered_task"] is task
+    assert captured["history"] is overlay_history
+    assert captured["base"] is base_latest
+    assert captured["minutes"] == (10,)
+    assert captured["forecast_id"] == "cz_forecast"
     assert sorted(result) == [10]
 
 
-def test_generate_layered_forecast_fields_merges_dual_warp(monkeypatch) -> None:  # noqa: ANN001
+_MERC = (
+    "+proj=merc +lat_ts=0 +lon_0=0 +k=1.0 +x_0=-1254222.15 +y_0=-6702777.85 "
+    "+a=6378137.0 +b=6378137.0 +units=m +nadgrids=@null +wktext +no_defs"
+)
+
+
+def _write_odim(path: Path, raw: np.ndarray, *, product: bytes, time: bytes) -> Path:
+    h5py = pytest.importorskip("h5py")
+    height, width = raw.shape
+    with h5py.File(path, "w") as hdf:
+        hdf.attrs["Conventions"] = b"ODIM_H5/V2_4"
+        what = hdf.create_group("what")
+        what.attrs["date"] = b"20260605"
+        what.attrs["time"] = time
+        what.attrs["object"] = b"COMP"
+        where = hdf.create_group("where")
+        where.attrs["projdef"] = _MERC.encode()
+        where.attrs["xsize"] = width
+        where.attrs["ysize"] = height
+        where.attrs["xscale"] = 1555.7
+        where.attrs["yscale"] = 1555.7
+        where.attrs["UL_lon"] = 11.2669
+        where.attrs["UL_lat"] = 51.4584
+        dataset = hdf.create_group("dataset1")
+        dataset.create_group("what").attrs["product"] = product
+        data1 = dataset.create_group("data1")
+        data1.create_dataset("data", data=raw)
+        dwhat = data1.create_group("what")
+        dwhat.attrs["gain"] = 0.5
+        dwhat.attrs["offset"] = -32.0
+        dwhat.attrs["nodata"] = 255.0
+        dwhat.attrs["undetect"] = 0.0
+        dwhat.attrs["quantity"] = b"DBZH"
+    return path
+
+
+def _layered_forecast(tmp_path: Path) -> ForecastProduct:
+    parent = ProductConfig(
+        id="cz",
+        label="Czechia",
+        inputs=(cz_maxz, cz_maxz),
+        output_dir=tmp_path / "out",
+        geo_bounds=GeoBounds(west=11.28, south=51.32, east=11.48, north=51.45),
+        center=GeoCenter(11.38, 51.39),
+        publish_delay_seconds=10,
+        base_name=timestamped_base("radar_cz"),
+        render=LAYERED_RENDER,
+    )
+    return ForecastProduct(id="cz_forecast", parent=parent, minutes=(10,), field_dir=tmp_path / "fields")
+
+
+def test_load_layered_history_streams_overlays_and_latest_base(tmp_path: Path) -> None:
+    forecast = _layered_forecast(tmp_path)
+    t0 = datetime(2026, 6, 5, 20, 55)
+    t1 = datetime(2026, 6, 5, 21, 0)
+    shape = (12, 16)
+
+    def _raw(value: int) -> np.ndarray:
+        raw = np.zeros(shape, dtype=np.uint8)
+        raw[3:9, 2:12] = value
+        return raw
+
+    # Older frame: the base file is not a valid HDF at all, proving the loader
+    # only ever decodes overlay files for non-latest frames.
+    stale_base = tmp_path / "old_base.hdf"
+    stale_base.write_bytes(b"never decoded")
+    overlay_t0 = _write_odim(tmp_path / "maxz_t0.hdf", _raw(80), product=b"MAX", time=b"205500")  # 8 dBZ
+    base_t1 = _write_odim(tmp_path / "cappi_t1.hdf", _raw(160), product=b"PCAPPI", time=b"210000")  # 48 dBZ
+    overlay_t1 = _write_odim(tmp_path / "maxz_t1.hdf", _raw(120), product=b"MAX", time=b"210000")  # 28 dBZ
+
+    task = ForecastGenTask(
+        forecast=forecast,
+        issue_timestamp=t1,
+        history=(
+            HistoryFrame(timestamp=t0, paths=(stale_base, overlay_t0)),
+            HistoryFrame(timestamp=t1, paths=(base_t1, overlay_t1)),
+        ),
+    )
+
+    overlay_history, base_latest = load_layered_history(task)
+
+    assert [field.timestamp for field in overlay_history] == [t0, t1]
+    assert base_latest.timestamp == t1
+    # Everything shares one grid so history stacks and the pair stays aligned.
+    transforms = {field.transform for field in (*overlay_history, base_latest)}
+    assert len(transforms) == 1
+    assert base_latest.crs == WEB_MERCATOR
+    assert np.nanmax(overlay_history[0].values) == pytest.approx(8.0)
+    assert np.nanmax(overlay_history[1].values) == pytest.approx(28.0)
+    assert np.nanmax(base_latest.values) == pytest.approx(48.0)
+
+
+def test_load_layered_history_requires_two_paths_per_frame(tmp_path: Path) -> None:
+    forecast = _layered_forecast(tmp_path)
+    t1 = datetime(2026, 6, 5, 21, 0)
+    task = ForecastGenTask(
+        forecast=forecast,
+        issue_timestamp=t1,
+        history=(HistoryFrame(timestamp=t1, paths=(tmp_path / "only_one.hdf",)),),
+    )
+
+    with pytest.raises(ValueError, match="2 input paths"):
+        load_layered_history(task)
+
+
+def test_generate_layered_forecast_fields_warps_pair_with_shared_motion(monkeypatch) -> None:  # noqa: ANN001
     captured: dict = {}
 
     def fake_motion_method(method: str):
@@ -297,33 +420,64 @@ def test_generate_layered_forecast_fields_merges_dual_warp(monkeypatch) -> None:
 
     t0 = datetime(2026, 6, 5, 21, 0)
     t1 = t0 + timedelta(minutes=5)
-    # Motion/history tip: MAX-Z denser than CAPPI.
-    motion = [
+    # Motion history is the denser MAX-Z; its tip doubles as the overlay field.
+    base_values = np.array([[20.0, -np.inf], [-np.inf, 20.0]])
+    overlay_values = np.array([[40.0, 36.0], [-np.inf, 20.0]])
+    overlay_history = [
         _field(np.array([[40.0, -np.inf], [-np.inf, 20.0]]), t0),
-        _field(np.array([[40.0, 36.0], [-np.inf, 20.0]]), t1),
+        _field(overlay_values, t1),
     ]
-    base_latest = _field(np.array([[20.0, -np.inf], [-np.inf, 20.0]]), t1)
-    overlay_latest = _field(np.array([[40.0, 36.0], [-np.inf, 20.0]]), t1)
+    base_latest = _field(base_values, t1)
 
     generated = generate_layered_forecast_fields(
-        motion,
+        overlay_history,
         base_latest,
-        overlay_latest,
         minutes=(10,),
-        floor_level=4.0,
         fast_warp=False,
         fast_motion=False,
         fast_idw=False,
     )
 
     assert sorted(generated) == [10]
-    assert len(captured["precips"]) == 2  # base then overlay
-    values = generated[10].values
-    assert values[0, 0] == pytest.approx(20.0)  # solid CAPPI where both echo
-    assert values[0, 1] == pytest.approx(36.0 - OVERLAY_VALUE_OFFSET)  # MAX-Z-only faded band
-    assert np.isneginf(values[1, 0])
-    assert values[1, 1] == pytest.approx(20.0)
-    assert generated[10].timestamp == t1 + timedelta(minutes=10)
+    assert len(captured["precips"]) == 2  # base then overlay, one shared velocity
+    frame = generated[10]
+    assert isinstance(frame, LayeredFrame)
+    # Both leads stay physical: no sentinel/banded values anywhere.
+    assert np.array_equal(frame.base.values, base_values.astype(np.float32))
+    assert np.array_equal(frame.overlay.values, overlay_values.astype(np.float32))
+    assert frame.timestamp == t1 + timedelta(minutes=10)
+    assert frame.base.timestamp == frame.overlay.timestamp == t1 + timedelta(minutes=10)
+
+
+def test_generate_layered_forecast_fields_validates_timestamps() -> None:
+    t0 = datetime(2026, 6, 5, 21, 0)
+    t1 = t0 + timedelta(minutes=5)
+    overlay_history = [_field(np.zeros((2, 2)), t0), _field(np.zeros((2, 2)), t1)]
+    stale_base = _field(np.zeros((2, 2)), t0)
+
+    with pytest.raises(ValueError, match="share a timestamp"):
+        generate_layered_forecast_fields(overlay_history, stale_base, minutes=(10,))
+
+
+def test_generate_layered_forecast_fields_transparent_when_both_empty(monkeypatch) -> None:  # noqa: ANN001
+    def fail_motion_method(method: str):  # noqa: ANN001
+        raise AssertionError("motion should not run for empty latest fields")
+
+    monkeypatch.setattr(forecast_generation, "_motion_method", fail_motion_method)
+
+    t0 = datetime(2026, 6, 5, 21, 0)
+    t1 = t0 + timedelta(minutes=5)
+    overlay_history = [
+        _field(np.full((2, 2), 30.0), t0),
+        _field(np.full((2, 2), np.nan), t1),
+    ]
+    base_latest = _field(np.full((2, 2), np.nan), t1)
+
+    generated = generate_layered_forecast_fields(overlay_history, base_latest, minutes=(10,))
+
+    assert sorted(generated) == [10]
+    assert isinstance(generated[10], RadarField)
+    assert np.isnan(generated[10].values).all()
 
 
 def test_coarse_motion_matches_full_resolution() -> None:

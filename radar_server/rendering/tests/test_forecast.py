@@ -6,9 +6,11 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField
 from radar_server.rendering.forecast import render_forecast_field
+from radar_server.rendering.layered import OVERLAY_OPACITY, LayeredFrame
 from radar_server.rendering.palettes import STANDARD_DBZH
 
 
@@ -75,3 +77,34 @@ def test_render_forecast_field_writes_variants_and_sidecar(tmp_path) -> None:  #
     assert "overlay" in manifest["variants"]
     assert _png_comment(overlay) == "GeoBox=11.27,48.04,19.64,51.46"
     assert ready_paths == [overlay]
+
+
+def test_render_forecast_field_renders_layered_frame_with_physical_palette(tmp_path) -> None:  # noqa: ANN001
+    timestamp = datetime(2026, 6, 5, 21, 10)
+    frame = LayeredFrame(
+        base=_field(np.array([[28.0, -np.inf], [-np.inf, -np.inf]]), timestamp),
+        overlay=_field(np.array([[28.0, 28.0], [-np.inf, -np.inf]]), timestamp),
+    )
+
+    result = render_forecast_field(
+        frame,
+        tmp_path,
+        STANDARD_DBZH,
+        base="radar_test_20260605_2100_fct10",
+        minute=10,
+        variants=(("overlay", 1.0),),
+        optimize=False,
+        bounds=(11.27, 48.04, 19.64, 51.46),
+    )
+
+    pixels = np.asarray(Image.open(result.variants["overlay"]).convert("RGBA"))
+    solid = STANDARD_DBZH.rgb[6]  # 28 dBZ
+    assert tuple(pixels[0, 0, :3]) == solid
+    assert pixels[0, 0, 3] == 255  # base echo renders solid
+    assert tuple(pixels[0, 1, :3]) == solid
+    assert pixels[0, 1, 3] == round(OVERLAY_OPACITY * 255)  # overlay-only echo is faded
+    assert pixels[1, 0, 3] == 0  # clear sky
+
+    sidecar = json.loads((tmp_path / "radar_test_20260605_2100_fct10.json").read_text())
+    assert sidecar["palette"] == STANDARD_DBZH.name
+    assert sidecar["timestamp"] == timestamp.isoformat()

@@ -31,6 +31,8 @@ upgradable and the optimized surface is small and testable.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
@@ -182,11 +184,46 @@ def extrapolate(
     ``grid_step=2``) while roughly halving the warp cost. ``grid_step == 1`` is
     the exact full-resolution scheme.
     """
+    return extrapolate_many(
+        [precip],
+        velocity,
+        timesteps,
+        outval=outval,
+        allow_nonfinite_values=allow_nonfinite_values,
+        vel_timestep=vel_timestep,
+        n_iter=n_iter,
+        interp_order=interp_order,
+        grid_step=grid_step,
+    )[0]
+
+
+def extrapolate_many(
+    precips: Sequence[np.ndarray],
+    velocity: np.ndarray,
+    timesteps,
+    *,
+    outval: float = np.nan,
+    allow_nonfinite_values: bool = False,
+    vel_timestep: float = 1.0,
+    n_iter: int = 1,
+    interp_order: int = 1,
+    grid_step: int = 1,
+) -> list[np.ndarray]:
+    """Extrapolate several fields sharing one velocity; one stack per field.
+
+    The displacement trajectory depends only on ``velocity`` and ``timesteps``
+    and dominates the cost, so it is integrated once and every field is warped
+    with it — each additional field costs one ``cv2.remap`` per lead. Used by
+    layered forecasts to warp base and overlay together. See
+    :func:`extrapolate` for the scheme and its knobs.
+    """
     import cv2
 
     if interp_order != 1:
         raise ValueError(f"fast extrapolate supports interp_order=1 only, got {interp_order}")
-    if not allow_nonfinite_values and precip is not None and np.any(~np.isfinite(precip)):
+    if not precips:
+        raise ValueError("extrapolate_many needs at least one precip field")
+    if not allow_nonfinite_values and any(np.any(~np.isfinite(precip)) for precip in precips):
         raise ValueError("precip contains non-finite values")
 
     if isinstance(timesteps, int):
@@ -199,7 +236,7 @@ def extrapolate(
 
     height, width = int(velocity.shape[1]), int(velocity.shape[2])
     vel_full = np.asarray(velocity, dtype=np.float32)
-    precip32 = None if precip is None else np.asarray(precip, dtype=np.float32)
+    precips32 = [np.asarray(precip, dtype=np.float32) for precip in precips]
 
     # Integrate the displacement on a coarsened grid (velocity rescaled to
     # coarse-pixel units), then upscale it for the full-resolution precip warp.
@@ -219,7 +256,7 @@ def extrapolate(
     xy_coords = np.stack([x_values, y_values]).astype(np.float32)
 
     full_x = full_y = None
-    if coarse and precip32 is not None:
+    if coarse:
         fx, fy = np.meshgrid(np.arange(width), np.arange(height))
         full_x = fx.astype(np.float32)
         full_y = fy.astype(np.float32)
@@ -251,7 +288,7 @@ def extrapolate(
         dv = cv2.resize(np.ascontiguousarray(displacement[1]), (width, height), interpolation=cv2.INTER_LINEAR)
         return np.stack([full_x + du * step, full_y + dv * step])
 
-    precip_extrap: list[np.ndarray] = []
+    extrapolated: list[list[np.ndarray]] = [[] for _ in precips32]
     displacement = np.zeros((2, int_height, int_width), dtype=np.float32)
     velocity_inc = vel.copy() * timestep_diff[0] / vel_timestep
 
@@ -266,11 +303,11 @@ def extrapolate(
                 interpolate_motion(displacement, velocity_inc, td)
             displacement -= velocity_inc
 
-        if precip32 is not None:
-            warped = warp(precip32, precip_coords(displacement), cv2.BORDER_CONSTANT, float(outval))
-            precip_extrap.append(warped)
+        coords = precip_coords(displacement)
+        for precip32, frames in zip(precips32, extrapolated):
+            frames.append(warp(precip32, coords, cv2.BORDER_CONSTANT, float(outval)))
 
-    return np.stack(precip_extrap)
+    return [np.stack(frames) for frames in extrapolated]
 
 
 def _prepare_frame(frame: np.ndarray, size_opening: int):

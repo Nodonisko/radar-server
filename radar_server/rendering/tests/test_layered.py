@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import h5py
@@ -10,12 +10,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, PaletteSpec, RadarField
+from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField, Rgba
 from radar_server.rendering.layered import (
     OVERLAY_OPACITY,
-    OVERLAY_VALUE_OFFSET,
-    build_layered_palette,
-    merge_layered_fields,
+    LayeredFrame,
+    colorize_layered,
     render_layered_png,
 )
 from radar_server.rendering.palettes import STANDARD_DBZH
@@ -25,6 +24,9 @@ _MERC = (
     "+a=6378137.0 +b=6378137.0 +units=m +nadgrids=@null +wktext +no_defs"
 )
 _UL_LON, _UL_LAT = 11.2669, 51.4584
+
+_NCOLORS = len(STANDARD_DBZH.colors)
+_TRANSPARENT = 2 * _NCOLORS
 
 
 def _field(values: np.ndarray) -> RadarField:
@@ -67,23 +69,7 @@ def _write_odim(path: Path, raw: np.ndarray, *, product: bytes) -> Path:
     return path
 
 
-def test_build_layered_palette_has_faded_then_solid_bands() -> None:
-    layered = build_layered_palette(STANDARD_DBZH)
-
-    assert layered.name == STANDARD_DBZH.name
-    assert layered.quantity == STANDARD_DBZH.quantity
-    assert len(layered.colors) == 2 * len(STANDARD_DBZH.colors)
-    assert len(layered.levels) == len(layered.colors) + 1
-    assert layered.alphas is not None
-    assert layered.alphas[: len(STANDARD_DBZH.colors)] == tuple(
-        OVERLAY_OPACITY for _ in STANDARD_DBZH.colors
-    )
-    assert layered.alphas[len(STANDARD_DBZH.colors) :] == tuple(1.0 for _ in STANDARD_DBZH.colors)
-    assert layered.levels[0] == pytest.approx(STANDARD_DBZH.levels[0] - OVERLAY_VALUE_OFFSET)
-    assert layered.levels[len(STANDARD_DBZH.colors)] == pytest.approx(STANDARD_DBZH.levels[0])
-
-
-def test_merge_layered_fields_keeps_base_and_shifts_overlay_only() -> None:
+def test_colorize_layered_solid_base_faded_overlay_transparent_rest() -> None:
     base = _field(
         np.array(
             [
@@ -101,28 +87,78 @@ def test_merge_layered_fields_keeps_base_and_shifts_overlay_only() -> None:
         )
     )
 
-    merged = merge_layered_fields(base, overlay, floor=4.0)
+    image = colorize_layered(base, overlay, STANDARD_DBZH)
 
-    assert merged.values[0, 0] == pytest.approx(40.0 - OVERLAY_VALUE_OFFSET)
-    assert merged.values[0, 1] == pytest.approx(20.0)  # base wins where both echo
-    assert np.isnan(merged.values[0, 2])
-    assert np.isneginf(merged.values[1, 0])
-    # Base below floor: overlay-only echo is painted faded.
-    assert merged.values[1, 1] == pytest.approx(36.0 - OVERLAY_VALUE_OFFSET)
-    assert merged.values[1, 2] == pytest.approx(28.0)
+    # Index layout: [0, n) solid base, [n, 2n) faded overlay, 2n transparent.
+    assert image.indices[0, 0] == _NCOLORS + 9  # overlay-only 40 dBZ, faded
+    assert image.indices[0, 1] == 4  # both echo -> solid base 20 dBZ
+    assert image.indices[0, 2] == _TRANSPARENT  # both missing, no nodata fill
+    assert image.indices[1, 0] == _TRANSPARENT  # both clear sky
+    assert image.indices[1, 1] == _NCOLORS + 8  # base below floor -> faded overlay 36 dBZ
+    assert image.indices[1, 2] == 6  # solid base 28 dBZ (overlay below it is irrelevant)
+
+    assert image.transparent_index == _TRANSPARENT
+    assert image.palette == STANDARD_DBZH.rgb + STANDARD_DBZH.rgb
+    assert image.palette_alphas == (255,) * _NCOLORS + (round(OVERLAY_OPACITY * 255),) * _NCOLORS
+    assert image.nodata_index is None
 
 
-def test_merge_clears_below_floor_base_without_overlay() -> None:
-    base = _field(np.array([[2.0, -np.inf], [np.nan, 20.0]]))
-    overlay = _field(np.array([[-np.inf, -np.inf], [np.nan, 40.0]]))
+def test_colorize_layered_nodata_follows_base_unless_overlay_echoes() -> None:
+    base = _field(np.array([[np.nan, np.nan], [2.0, 20.0]]))
+    overlay = _field(np.array([[np.nan, 40.0], [-np.inf, -np.inf]]))
 
-    merged = merge_layered_fields(base, overlay, floor=4.0)
+    image = colorize_layered(base, overlay, STANDARD_DBZH, nodata_fill=Rgba(0, 0, 0, 0.15))
 
-    # Below-floor base with no overlay echo must become clear-sky, not a gap value.
-    assert np.isneginf(merged.values[0, 0])
-    assert np.isneginf(merged.values[0, 1])
-    assert np.isnan(merged.values[1, 0])
-    assert merged.values[1, 1] == pytest.approx(20.0)
+    assert image.nodata_index == _TRANSPARENT + 1
+    assert image.indices[0, 0] == image.nodata_index  # both missing -> nodata
+    assert image.indices[0, 1] == _NCOLORS + 9  # overlay echo overrides missing base
+    assert image.indices[1, 0] == _TRANSPARENT  # below-floor base is clear sky, not nodata
+    assert image.indices[1, 1] == 4  # solid base
+    assert image.nodata_rgba == (0, 0, 0, 38)
+
+
+def test_layered_frame_validates_pair_alignment() -> None:
+    base = _field(np.zeros((2, 2)))
+    overlay = _field(np.zeros((2, 2)))
+
+    stale = RadarField(
+        values=overlay.values,
+        crs=overlay.crs,
+        transform=overlay.transform,
+        quantity=overlay.quantity,
+        timestamp=overlay.timestamp + timedelta(minutes=5),
+    )
+    with pytest.raises(ValueError, match="timestamp"):
+        LayeredFrame(base=base, overlay=stale)
+
+    with pytest.raises(ValueError, match="quantity"):
+        LayeredFrame(
+            base=base,
+            overlay=RadarField(
+                values=overlay.values,
+                crs=overlay.crs,
+                transform=overlay.transform,
+                quantity="TH",
+                timestamp=overlay.timestamp,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="overlay_opacity"):
+        LayeredFrame(base=base, overlay=overlay, overlay_opacity=1.5)
+
+
+def test_layered_frame_downsampled_keeps_base_priority() -> None:
+    # One pooling window holds a weak base echo and a stronger overlay-only
+    # echo; the documented rule is that the base echo still renders solid.
+    base = _field(np.array([[20.0, np.nan], [np.nan, np.nan]]))
+    overlay = _field(np.array([[np.nan, 60.0], [np.nan, np.nan]]))
+    frame = LayeredFrame(base=base, overlay=overlay)
+
+    small = frame.downsampled(2.0)
+
+    assert small.base.shape == (1, 1)
+    image = small.colorized(STANDARD_DBZH)
+    assert image.indices[0, 0] == 4  # solid base 20 dBZ, not the faded 60 dBZ
 
 
 def test_render_layered_png_solid_base_and_faded_overlay(tmp_path: Path) -> None:
@@ -152,7 +188,7 @@ def test_render_layered_png_solid_base_and_faded_overlay(tmp_path: Path) -> None
     assert tuple(pixels[5, 4, :3]) == solid
     assert pixels[5, 4, 3] == 255
 
-    # MAX-Z-only cell uses the same RGB at 70% opacity.
+    # MAX-Z-only cell uses the same RGB at the overlay opacity.
     assert tuple(pixels[5, 9, :3]) == solid
     assert pixels[5, 9, 3] == round(OVERLAY_OPACITY * 255)
 
@@ -163,14 +199,3 @@ def test_render_layered_png_solid_base_and_faded_overlay(tmp_path: Path) -> None
 def test_render_layered_png_requires_two_inputs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="exactly 2 inputs"):
         render_layered_png([], tmp_path, STANDARD_DBZH, base="x", optimize=False)
-
-
-def test_palette_alphas_validation() -> None:
-    with pytest.raises(ValueError, match="alphas"):
-        PaletteSpec(
-            name="bad",
-            quantity="DBZH",
-            levels=(0.0, 4.0, 8.0),
-            colors=("#000000", "#ffffff"),
-            alphas=(0.5,),
-        )

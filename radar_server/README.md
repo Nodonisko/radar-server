@@ -197,6 +197,10 @@ MQTT / polling (main thread, networking only)
 - Generated fields are written as `.npz` to `data/<parent>/forecast_fields/`
   (atomic clear-and-replace, latest issue only); rendering reads them like
   ordinary inputs, so it is idempotent and restart-durable.
+- Layered forecasts (Czechia CAPPI-under-MAX-Z) estimate motion from the MAX-Z
+  history only, warp the latest base+overlay pair with one shared displacement,
+  and store each lead as the two physical arrays in a single `.npz`; the faded
+  overlay presentation is applied at render time.
 - Frames render to `output/forecast/<parent>/<base>_fctNN_overlay.png`.
 
 ## Fetching

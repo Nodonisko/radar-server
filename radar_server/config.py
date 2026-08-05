@@ -15,13 +15,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec, Rgba
+from .rendering.layered import LAYERED_PIPELINE_ID, is_layered_pipeline, render_layered_png
 from .rendering.palettes import STANDARD_DBZH
-from .rendering.layered import (
-    LAYERED_PIPELINE_ID,
-    build_layered_palette,
-    is_layered_pipeline,
-    render_layered_png,
-)
 from .rendering.pipeline import (
     DEFAULT_VARIANTS,
     Bounds,
@@ -169,8 +164,10 @@ class CompositeRenderer(Protocol):
 
 @dataclass(frozen=True)
 class RenderPipeline:
+    # ``render_single`` is the fast path for one-input products without bounds;
+    # ``None`` sends every render through ``render_composite``.
     id: str
-    render_single: SingleFileRenderer
+    render_single: SingleFileRenderer | None
     render_composite: CompositeRenderer
 
 
@@ -181,11 +178,11 @@ DEFAULT_RENDER_PIPELINE = RenderPipeline(
 )
 
 # Solid base + faded overlay-only echoes (Czechia CAPPI under MAX-Z). The
-# composite entry point expects exactly two inputs in (base, overlay) order;
-# single-file falls back to the ordinary PNG path.
+# renderer expects exactly two inputs in (base, overlay) order, so there is no
+# single-file path.
 LAYERED_RENDER_PIPELINE = RenderPipeline(
     id=LAYERED_PIPELINE_ID,
-    render_single=render_radar_png,
+    render_single=None,
     render_composite=render_layered_png,
 )
 
@@ -419,15 +416,12 @@ class ForecastProduct:
 
     @property
     def palette(self) -> PaletteSpec:
-        """Physical palette (dBZ floor / motion). Not the layered render palette."""
-        return self.parent.render.palette
+        """Physical palette shared by generation (floor/motion) and rendering.
 
-    @property
-    def render_palette(self) -> PaletteSpec:
-        """Palette used when colorizing stored forecast fields to PNG."""
-        if is_layered_pipeline(self.parent.render.pipeline.id):
-            return build_layered_palette(self.palette)
-        return self.palette
+        Layered products render with this same palette; the faded-overlay
+        presentation is applied at colorize time from the stored field pair.
+        """
+        return self.parent.render.palette
 
     @property
     def geo_bounds(self) -> GeoBounds:
@@ -645,7 +639,8 @@ it_sri_arco = InputConfig(
 # CAPPI (solid ground rain) under MAX-Z-only echoes at reduced opacity. Both
 # CHMI feeds share a pixel-aligned grid and 5-minute cadence; the product waits
 # for both files at a timestamp before rendering. Forecast estimates motion from
-# MAX-Z history, warps both fields, then band-encodes the same layered merge.
+# MAX-Z history and warps both fields; each lead stays a physical (base,
+# overlay) pair that is combined at colorize time.
 cz_product = ProductConfig(
     id="cz",
     label="Czechia radar",

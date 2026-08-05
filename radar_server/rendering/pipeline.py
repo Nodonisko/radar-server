@@ -17,12 +17,13 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple, Union
 
-from .colorize import colorize
+from .colorize import IndexedImage, colorize
 from .composite import composite_to_web_mercator
-from .core import PaletteSpec, RadarField, Rgba
+from .core import GeoTransform, PaletteSpec, RadarField, Rgba
 from .decode import load_odim_hdf
 from .downsample import downsample_max
 from .encode import PngWriteTimings, write_png
@@ -49,7 +50,7 @@ class RenderResult:
 
 
 @dataclass
-class _EmitTimings:
+class EmitTimings:
     downsample: float = 0.0
     colorize: float = 0.0
     png_write: float = 0.0
@@ -58,17 +59,57 @@ class _EmitTimings:
     total: float = 0.0
 
 
-def _log_render_performance(
+class ComposedFrame(Protocol):
+    """A multi-field frame that knows how to shrink and colorize itself.
+
+    :class:`RadarField` covers the ordinary single-field case; anything else
+    (e.g. the layered base+overlay pair) implements this protocol so the emit
+    tail can stay agnostic of how many fields make up one output image.
+    """
+
+    @property
+    def crs(self) -> str: ...
+
+    @property
+    def transform(self) -> GeoTransform: ...
+
+    @property
+    def quantity(self) -> str: ...
+
+    @property
+    def timestamp(self) -> datetime: ...
+
+    def downsampled(self, factor: float) -> "ComposedFrame": ...
+
+    def colorized(self, palette: PaletteSpec, *, nodata_fill: Rgba | None = None) -> IndexedImage: ...
+
+
+Frame = Union[RadarField, ComposedFrame]
+
+
+def _downsample_frame(frame: Frame, factor: float) -> Frame:
+    if isinstance(frame, RadarField):
+        return downsample_max(frame, factor)
+    return frame.downsampled(factor)
+
+
+def _colorize_frame(frame: Frame, palette: PaletteSpec, nodata_fill: Rgba | None) -> IndexedImage:
+    if isinstance(frame, RadarField):
+        return colorize(frame, palette, nodata_fill=nodata_fill)
+    return frame.colorized(palette, nodata_fill=nodata_fill)
+
+
+def log_render_performance(
     *,
     base: str,
     source_count: int,
     result: RenderResult,
-    field: RadarField,
+    field: Frame,
     total: float,
     decode: float,
     transform_label: str,
     transform: float,
-    emit: _EmitTimings,
+    emit: EmitTimings,
 ) -> None:
     LOGGER.info(
         (
@@ -95,15 +136,15 @@ def _log_render_performance(
     )
 
 
-def _emit(
-    field: RadarField,
+def emit_frame(
+    field: Frame,
     output_dir: Path,
     palette: PaletteSpec,
     base: str,
     variants: Sequence[Tuple[str, float]],
     optimize: bool,
     sources: Sequence[str],
-    timings: _EmitTimings,
+    timings: EmitTimings,
     metadata_bounds: Bounds | None = None,
     nodata_fill: Rgba | None = None,
     on_output_ready: OutputReadyCallback | None = None,
@@ -120,11 +161,11 @@ def _emit(
     manifest: Dict[str, dict] = {}
     for name, factor in variants:
         step_start = time.perf_counter()
-        variant_field = downsample_max(field, factor)
+        variant_field = _downsample_frame(field, factor)
         timings.downsample += time.perf_counter() - step_start
 
         step_start = time.perf_counter()
-        image = colorize(variant_field, palette, nodata_fill=nodata_fill)
+        image = _colorize_frame(variant_field, palette, nodata_fill)
         timings.colorize += time.perf_counter() - step_start
 
         path = output_dir / f"{base}_{name}.png"
@@ -199,8 +240,8 @@ def render_radar_png(
     field = to_web_mercator(source_field)
     reproject_time = time.perf_counter() - step_start
 
-    emit_timings = _EmitTimings()
-    result = _emit(
+    emit_timings = EmitTimings()
+    result = emit_frame(
         field,
         output_dir,
         palette,
@@ -212,7 +253,7 @@ def render_radar_png(
         nodata_fill=nodata_fill,
         on_output_ready=on_output_ready,
     )
-    _log_render_performance(
+    log_render_performance(
         base=base,
         source_count=1,
         result=result,
@@ -260,8 +301,8 @@ def render_composite_png(
     field = composite_to_web_mercator(fields, bounds=bounds)
     composite_time = time.perf_counter() - step_start
 
-    emit_timings = _EmitTimings()
-    result = _emit(
+    emit_timings = EmitTimings()
+    result = emit_frame(
         field,
         output_dir,
         palette,
@@ -274,7 +315,7 @@ def render_composite_png(
         nodata_fill=nodata_fill,
         on_output_ready=on_output_ready,
     )
-    _log_render_performance(
+    log_render_performance(
         base=base,
         source_count=len(paths),
         result=result,

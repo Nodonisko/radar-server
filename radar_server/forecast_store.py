@@ -1,10 +1,12 @@
 """On-disk store for computed forecast fields.
 
-Forecast generation writes each extrapolated :class:`RadarField` to a
-compressed ``.npz`` file under the forecast product's ``field_dir``. These
-files act as the "inputs" of forecast frame rendering, mirroring how observed
-products consume downloaded HDF files: rendering becomes ordinary, idempotent,
-restart-durable work driven by the filesystem.
+Forecast generation writes each extrapolated lead to a compressed ``.npz``
+file under the forecast product's ``field_dir``: a single physical
+:class:`RadarField`, or — for layered products — the base and overlay arrays
+of a :class:`LayeredFrame`, still in physical units. These files act as the
+"inputs" of forecast frame rendering, mirroring how observed products consume
+downloaded HDF files: rendering becomes ordinary, idempotent, restart-durable
+work driven by the filesystem.
 
 Only the latest issue time matters, so :func:`write_forecast_fields` performs
 an atomic clear-and-replace of the whole field set.
@@ -23,6 +25,7 @@ import numpy as np
 from .config import ForecastProduct
 from .render_jobs import output_base
 from .rendering.core import GeoTransform, RadarField
+from .rendering.layered import LayeredFrame
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ _STALE_PART_SECONDS = 3600
 
 @dataclass(frozen=True)
 class StoredForecastField:
-    field: RadarField
+    field: RadarField | LayeredFrame
     issue_timestamp: datetime
     minute: int
 
@@ -74,16 +77,31 @@ def expected_forecast_paths(forecast: ForecastProduct, issue_timestamp: datetime
     return tuple(paths)
 
 
-def save_field(field: RadarField, path: Path, *, issue_timestamp: datetime, minute: int) -> None:
-    """Write one field atomically (``.part`` then rename)."""
+def save_field(
+    field: RadarField | LayeredFrame,
+    path: Path,
+    *,
+    issue_timestamp: datetime,
+    minute: int,
+) -> None:
+    """Write one field atomically (``.part`` then rename).
+
+    Layered frames are stored as two physical arrays (``values`` = base,
+    ``overlay_values`` = overlay); the faded presentation is applied only at
+    render time, so the store never contains encoded sentinel values.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + _PART_SUFFIX)
     transform = field.transform
+    if isinstance(field, LayeredFrame):
+        arrays = {"values": field.base.values, "overlay_values": field.overlay.values}
+    else:
+        arrays = {"values": field.values}
     with tmp_path.open("wb") as fh:
         np.savez_compressed(
             fh,
-            values=field.values,
+            **arrays,
             x_min=transform.x_min,
             y_max=transform.y_max,
             px=transform.px,
@@ -109,13 +127,21 @@ def load_field(path: Path) -> StoredForecastField:
             width=int(data["width"]),
             height=int(data["height"]),
         )
-        field = RadarField(
-            values=np.asarray(data["values"], dtype=np.float32),
-            crs=str(data["crs"]),
-            transform=transform,
-            quantity=str(data["quantity"]),
-            timestamp=datetime.fromisoformat(str(data["valid_timestamp"])),
-        )
+
+        def _field(values: np.ndarray) -> RadarField:
+            return RadarField(
+                values=np.asarray(values, dtype=np.float32),
+                crs=str(data["crs"]),
+                transform=transform,
+                quantity=str(data["quantity"]),
+                timestamp=datetime.fromisoformat(str(data["valid_timestamp"])),
+            )
+
+        field: RadarField | LayeredFrame
+        if "overlay_values" in data:
+            field = LayeredFrame(base=_field(data["values"]), overlay=_field(data["overlay_values"]))
+        else:
+            field = _field(data["values"])
         return StoredForecastField(
             field=field,
             issue_timestamp=datetime.fromisoformat(str(data["issue_timestamp"])),

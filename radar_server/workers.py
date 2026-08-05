@@ -20,6 +20,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from queue import Empty
 from typing import Callable, Iterable
 
@@ -39,12 +40,19 @@ from .queueing import (
 from .render_jobs import bounds_tuple, outputs_exist, render_job, resolve_render_jobs
 from .rendering.core import RadarField
 from .rendering.forecast import render_forecast_field
+from .rendering.layered import LayeredFrame
 from .rendering.pipeline import OutputReadyCallback
 
 LOGGER = logging.getLogger(__name__)
 
 RENDER_WORKER_COUNT = 4
 FORECAST_GEN_WORKER_COUNT = 6
+
+# Multi-input products stall entirely when one feed stops (every input must be
+# present at a timestamp before it renders), so warn when one input's newest
+# timestamp trails a sibling's by more than this.
+INPUT_LAG_WARN_SECONDS = 15 * 60
+_INPUT_LAG_WARN_COOLDOWN_SECONDS = 15 * 60
 
 
 class IndexHolder:
@@ -213,7 +221,7 @@ class RenderWorker(_QueueWorker):
         render_forecast_field(
             stored.field,
             forecast.output_dir,
-            forecast.render_palette,
+            forecast.palette,
             base=task.base,
             minute=task.minute,
             variants=forecast.render_variants,
@@ -252,6 +260,7 @@ class DownloadWorker(_QueueWorker):
         self.sync_func = sync_input
         self.download_func = download_remote_file
         self.now_func: Callable[[], datetime] = datetime.utcnow
+        self._input_lag_warned: dict[str, datetime] = {}
 
     def _execute(self, task) -> None:  # noqa: ANN001
         now = self.now_func()
@@ -293,7 +302,60 @@ class DownloadWorker(_QueueWorker):
         wants = update_forecast_wants(self._want_board, index, self._forecasts)
         level = logging.INFO if enqueued or wants else logging.DEBUG
         LOGGER.log(level, "Ingest refresh: %d render tasks enqueued, %d forecast wants updated", enqueued, wants)
+        self._warn_lagging_inputs(index, now=now or self.now_func())
         return index
+
+    def _warn_lagging_inputs(self, index: LocalInputIndex, *, now: datetime) -> None:
+        for product, input_config, lag_seconds in find_lagging_inputs(index, self._products):
+            last = self._input_lag_warned.get(input_config.id)
+            if last is not None and (now - last).total_seconds() < _INPUT_LAG_WARN_COOLDOWN_SECONDS:
+                continue
+            self._input_lag_warned[input_config.id] = now
+            if lag_seconds == float("inf"):
+                LOGGER.warning(
+                    "Input %s has no local files; product %s cannot render until it recovers",
+                    input_config.id,
+                    product.id,
+                )
+            else:
+                LOGGER.warning(
+                    "Input %s lags product %s's freshest input by %.0f minutes; newer timestamps cannot render",
+                    input_config.id,
+                    product.id,
+                    lag_seconds / 60,
+                )
+
+
+def find_lagging_inputs(
+    index: LocalInputIndex,
+    products: Iterable[ProductConfig],
+    *,
+    max_lag_seconds: float = INPUT_LAG_WARN_SECONDS,
+) -> list[tuple[ProductConfig, InputConfig, float]]:
+    """Inputs of multi-input products whose newest timestamp trails a sibling's.
+
+    Returns ``(product, input, lag_seconds)`` per lagging input; the lag is
+    ``inf`` when the input has no local files at all. Single-input products are
+    skipped — total feed silence is a different (ingest-level) failure.
+    """
+    lagging: list[tuple[ProductConfig, InputConfig, float]] = []
+    for product in products:
+        if not product.enabled or len(product.inputs) < 2:
+            continue
+        newest = {
+            input_config.id: max(index.timestamps_for(input_config), default=None)
+            for input_config in product.inputs
+        }
+        known = [timestamp for timestamp in newest.values() if timestamp is not None]
+        if not known:
+            continue
+        freshest = max(known)
+        for input_config in product.inputs:
+            timestamp = newest[input_config.id]
+            lag = float("inf") if timestamp is None else (freshest - timestamp).total_seconds()
+            if lag > max_lag_seconds:
+                lagging.append((product, input_config, lag))
+    return lagging
 
 
 def enqueue_observed_render_jobs(
@@ -334,16 +396,46 @@ def build_forecast_gen_task(forecast: ForecastProduct, index: LocalInputIndex) -
 
     frames: list[HistoryFrame] = []
     for timestamp in timestamps[-forecast.history_frames :]:
-        paths = tuple(
-            item.path
-            for input_config in parent.inputs
-            for item in index.files_for(input_config, timestamp)
-        )
-        if not paths:
-            LOGGER.info("Forecast %s skipped: missing input files for %s", forecast.id, timestamp)
+        paths = _history_frame_paths(forecast, index, timestamp)
+        if paths is None:
             return None
         frames.append(HistoryFrame(timestamp=timestamp, paths=paths))
     return ForecastGenTask(forecast=forecast, issue_timestamp=issue_timestamp, history=tuple(frames))
+
+
+def _history_frame_paths(
+    forecast: ForecastProduct,
+    index: LocalInputIndex,
+    timestamp: datetime,
+) -> tuple[Path, ...] | None:
+    """Resolve one history frame's input files, or ``None`` to skip the task.
+
+    Layered forecasts need exactly one file per input in input order (a
+    re-published duplicate must not become an extra input), so the newest file
+    per input wins. Other forecasts composite every available file.
+    """
+    parent = forecast.parent
+    if forecast.layered:
+        paths: list[Path] = []
+        for input_config in parent.inputs:
+            files = index.files_for(input_config, timestamp)
+            if not files:
+                LOGGER.info(
+                    "Forecast %s skipped: missing %s file for %s", forecast.id, input_config.id, timestamp
+                )
+                return None
+            paths.append(max(files, key=lambda item: item.path.name).path)
+        return tuple(paths)
+
+    paths = [
+        item.path
+        for input_config in parent.inputs
+        for item in index.files_for(input_config, timestamp)
+    ]
+    if not paths:
+        LOGGER.info("Forecast %s skipped: missing input files for %s", forecast.id, timestamp)
+        return None
+    return tuple(paths)
 
 
 def update_forecast_wants(
@@ -360,10 +452,10 @@ def update_forecast_wants(
     return count
 
 
-GenerateFunc = Callable[[ForecastGenTask], "dict[int, RadarField]"]
+GenerateFunc = Callable[[ForecastGenTask], "dict[int, RadarField | LayeredFrame]"]
 
 
-def _default_generate(task: ForecastGenTask) -> dict[int, RadarField]:
+def _default_generate(task: ForecastGenTask) -> dict[int, RadarField | LayeredFrame]:
     from .forecast_generation import generate_for_task
 
     return generate_for_task(task)

@@ -21,10 +21,15 @@ from .core import WEB_MERCATOR, WGS84, GeoTransform, RadarField
 from .reproject import finest_cell, resample_to_grid, web_mercator_bbox
 
 
-def _target_grid(
+def target_grid(
     fields: Sequence[RadarField],
     bounds: Optional[Tuple[float, float, float, float]],
 ) -> GeoTransform:
+    """Shared Web Mercator grid for ``fields``: finest cell, bounds or union extent.
+
+    Public because layered rendering and forecast history loading warp several
+    inputs onto one pixel-aligned grid using the same rules as compositing.
+    """
     # One forward transformer per field, reused for cell size and (when needed)
     # the extent, instead of rebuilding it for each.
     fwds = [Transformer.from_crs(f.crs, WEB_MERCATOR, always_xy=True) for f in fields]
@@ -66,7 +71,7 @@ def composite_to_web_mercator(
     if len(timestamps) > 1:
         raise ValueError(f"composite inputs must share a timestamp, got {sorted(timestamps)}")
 
-    target = _target_grid(fields, bounds)
+    target = target_grid(fields, bounds)
 
     accumulator = np.full((target.height, target.width), np.nan, dtype=np.float32)
     for field in fields:

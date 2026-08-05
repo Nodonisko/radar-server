@@ -15,6 +15,7 @@ from typing import Iterable
 from .config import GeoBounds, InputConfig, ProductConfig, RenderContext
 from .fetching import LocalInputFile
 from .input_index import LocalInputIndex
+from .rendering.layered import is_layered_pipeline
 from .rendering.pipeline import Bounds, OutputReadyCallback, RenderResult
 
 LOGGER = logging.getLogger(__name__)
@@ -80,13 +81,13 @@ def render_job(
 
     product = job.product
     render = product.render
-    paths = [item.path for item in job.files]
+    paths = _job_paths(job)
     if not paths:
         raise ValueError(f"render job {product.id!r} has no input files")
 
     base = output_base(product, job.timestamp)
     bounds = bounds_tuple(product.geo_bounds)
-    if len(paths) == 1 and bounds is None:
+    if len(paths) == 1 and bounds is None and render.pipeline.render_single is not None:
         return render.pipeline.render_single(
             paths[0],
             product.output_dir,
@@ -108,6 +109,23 @@ def render_job(
         nodata_fill=render.nodata_fill,
         on_output_ready=on_output_ready,
     )
+
+
+def _job_paths(job: RenderJob) -> list[Path]:
+    """Input paths for one render, normalized for the product's pipeline.
+
+    Layered pipelines require exactly one file per input in input order, so a
+    re-published duplicate for one timestamp must not become a third input;
+    the newest file (by name) per input wins. Other pipelines composite every
+    available file.
+    """
+    if is_layered_pipeline(job.product.render.pipeline.id):
+        return [
+            max(render_input.files, key=lambda item: item.path.name).path
+            for render_input in job.inputs
+            if render_input.files
+        ]
+    return [item.path for item in job.files]
 
 
 def outputs_exist(job: RenderJob) -> bool:

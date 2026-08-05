@@ -8,6 +8,7 @@ import numpy as np
 from radar_server import forecast_store
 from radar_server.config import ForecastProduct, GeoBounds, GeoCenter, ProductConfig, cz_maxz, timestamped_base
 from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField
+from radar_server.rendering.layered import LayeredFrame
 
 ISSUE = datetime(2026, 6, 5, 21, 0)
 
@@ -61,6 +62,26 @@ def test_save_and_load_field_round_trips_everything(tmp_path: Path) -> None:
     assert stored.issue_timestamp == ISSUE
     assert stored.minute == 10
     assert not list(path.parent.glob("*.part"))  # atomic write left no temp file
+
+
+def test_save_and_load_layered_frame_round_trips_physical_pair(tmp_path: Path) -> None:
+    timestamp = datetime(2026, 6, 5, 21, 10)
+    base_values = np.array([[10.0, np.nan], [-np.inf, 20.0]])
+    overlay_values = np.array([[40.0, 36.0], [np.nan, 20.0]])
+    frame = LayeredFrame(base=_field(base_values, timestamp), overlay=_field(overlay_values, timestamp))
+    path = tmp_path / "fields" / "radar_test_20260605_2100_fct10.npz"
+
+    forecast_store.save_field(frame, path, issue_timestamp=ISSUE, minute=10)
+    stored = forecast_store.load_field(path)
+
+    assert isinstance(stored.field, LayeredFrame)
+    # Both layers survive in physical units; no sentinel/banded values on disk.
+    np.testing.assert_array_equal(stored.field.base.values, base_values.astype(np.float32))
+    np.testing.assert_array_equal(stored.field.overlay.values, overlay_values.astype(np.float32))
+    assert stored.field.transform == frame.transform
+    assert stored.field.timestamp == timestamp
+    assert stored.issue_timestamp == ISSUE
+    assert stored.minute == 10
 
 
 def test_write_forecast_fields_clears_superseded_issues(tmp_path: Path) -> None:

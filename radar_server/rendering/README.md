@@ -10,6 +10,8 @@ sibling packages under `radar_server/`.
 - Lossless output resolution computed per file (finest native cell).
 - Smaller variants via max-pooling (fractional factors supported).
 - Composites: merge N HDF5 files into one PNG, custom or union bounds, max overlap.
+- Layered products (`layered.py`): a solid base field with overlay-only echoes at
+  reduced opacity (Czechia CAPPI under MAX-Z), combined at the palette-index level.
 - Paletted PNGs (one transparent index) + oxipng; optional partially transparent
   fill for missing-data (NaN) cells via `nodata_fill`.
 
@@ -93,4 +95,15 @@ tests use the committed OPERA fixtures and compare renders against PNG snapshots
   product can opt into a partially transparent `nodata_fill` (e.g.
   `Rgba(0, 0, 0, 0.15)`) that tints only the NaN no-coverage cells while
   clear-sky and below-floor cells remain fully transparent.
+
+- **Layered rendering keeps both fields physical and merges at the palette-index
+  level.** A `LayeredFrame` carries the (base, overlay) pair in plain dBZ through
+  downsample/store/render; `colorize_layered` colorizes each field with the
+  ordinary palette and combines indices (base echo → solid color, overlay-only
+  echo → same color at reduced alpha via the PNG `tRNS` table). No sentinel
+  offsets or doubled "render palettes" exist anywhere. One deliberate
+  consequence at reduced resolutions: base and overlay are max-pooled
+  separately, so any base echo in a pooling window renders solid even when the
+  window also holds a stronger overlay-only echo — ground rain is never hidden
+  behind a faded column-max echo.
 

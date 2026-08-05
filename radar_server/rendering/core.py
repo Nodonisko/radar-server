@@ -123,17 +123,12 @@ class PaletteSpec:
     more entry than ``colors``: ``colors[i]`` fills ``[levels[i], levels[i+1])``.
     Values below ``levels[0]`` are transparent; values at/above ``levels[-1]``
     clamp to the top color.
-
-    ``alphas``, when set, gives a per-color opacity in ``[0.0, 1.0]`` (same
-    length as ``colors``). ``None`` means every color is fully opaque — the
-    usual case for a single-field product.
     """
 
     name: str
     quantity: str
     levels: Tuple[float, ...]
     colors: Tuple[str, ...]
-    alphas: Tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if len(self.levels) != len(self.colors) + 1:
@@ -145,22 +140,7 @@ class PaletteSpec:
         # whose color no value can ever land in (a dead palette entry).
         if any(b <= a for a, b in zip(self.levels, self.levels[1:])):
             raise ValueError(f"palette {self.name!r}: levels must be strictly ascending")
-        if self.alphas is not None:
-            if len(self.alphas) != len(self.colors):
-                raise ValueError(
-                    f"palette {self.name!r}: alphas ({len(self.alphas)}) must match "
-                    f"colors ({len(self.colors)})"
-                )
-            if any(not 0.0 <= a <= 1.0 for a in self.alphas):
-                raise ValueError(f"palette {self.name!r}: alphas must be in [0.0, 1.0]")
 
     @property
     def rgb(self) -> list[Tuple[int, int, int]]:
         return [_parse_hex(c) for c in self.colors]
-
-    @property
-    def alpha_bytes(self) -> Tuple[int, ...] | None:
-        """Per-color 8-bit alphas for the PNG ``tRNS`` chunk, or ``None``."""
-        if self.alphas is None:
-            return None
-        return tuple(round(a * 255) for a in self.alphas)

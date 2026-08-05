@@ -1,8 +1,9 @@
 """Forecast field generation: pysteps motion estimation plus extrapolation.
 
 This is the compute half of nowcasting, split from rendering. It produces
-in-memory :class:`RadarField` objects per lead minute; persisting them is the
-job of ``forecast_store`` and rendering them the job of the render lane.
+in-memory :class:`RadarField` objects per lead minute (or, for layered
+products, physical base+overlay :class:`LayeredFrame` pairs); persisting them
+is the job of ``forecast_store`` and rendering them the job of the render lane.
 
 pysteps is imported lazily so that importing this module stays cheap.
 """
@@ -19,12 +20,13 @@ from typing import Sequence
 
 import numpy as np
 
+from .config import ForecastProduct
 from .queueing import ForecastGenTask
 from .render_jobs import bounds_tuple
-from .rendering.composite import _target_grid, composite_to_web_mercator
-from .rendering.core import WEB_MERCATOR, RadarField
+from .rendering.composite import composite_to_web_mercator, target_grid
+from .rendering.core import WEB_MERCATOR, GeoTransform, RadarField
 from .rendering.decode import load_odim_hdf
-from .rendering.layered import merge_layered_fields
+from .rendering.layered import LayeredFrame, decode_layered_pair
 from .rendering.reproject import resample_to_grid, to_web_mercator
 
 LOGGER = logging.getLogger(__name__)
@@ -47,94 +49,77 @@ def load_history_fields(task: ForecastGenTask) -> list[RadarField]:
     return fields
 
 
-def load_layered_history_pairs(task: ForecastGenTask) -> tuple[list[RadarField], list[RadarField]]:
-    """Decode history as (base, overlay) pairs on one shared Web Mercator grid.
+def load_layered_history(task: ForecastGenTask) -> tuple[list[RadarField], RadarField]:
+    """Overlay history plus the latest base field, on one shared grid.
 
     Each ``HistoryFrame.paths`` must be ``(base, overlay)`` in product input
-    order — for Czechia, CAPPI then MAX-Z.
+    order — for Czechia, CAPPI then MAX-Z. Motion needs the full overlay
+    history, but only the newest base is warped into the forecast, so older
+    base files are never decoded.
     """
 
     forecast = task.forecast
     bounds = bounds_tuple(forecast.geo_bounds)
     quantity = forecast.palette.quantity
-    decoded_pairs: list[list[RadarField]] = []
-    for frame in task.history:
+    frames = task.history
+    if not frames:
+        raise ValueError(f"layered forecast {forecast.id!r} has no history frames")
+    for frame in frames:
         if len(frame.paths) != 2:
             raise ValueError(
                 f"layered forecast {forecast.id!r} needs 2 input paths per history "
                 f"frame, got {len(frame.paths)} at {frame.timestamp}"
             )
-        pair = [load_odim_hdf(path, quantity=quantity) for path in frame.paths]
-        if pair[0].timestamp != pair[1].timestamp:
-            raise ValueError(
-                f"layered forecast inputs must share a timestamp, got "
-                f"{pair[0].timestamp} vs {pair[1].timestamp}"
-            )
-        decoded_pairs.append(pair)
 
-    all_sources = [field for pair in decoded_pairs for field in pair]
-    target = _target_grid(all_sources, bounds)
+    base_source, overlay_latest_source = decode_layered_pair(frames[-1].paths, quantity=quantity)
+    # One shared target grid keeps history frames stackable for motion and the
+    # latest pair pixel-aligned for the layered merge-at-colorize.
+    target = target_grid([base_source, overlay_latest_source], bounds)
 
-    base_fields: list[RadarField] = []
-    overlay_fields: list[RadarField] = []
-    for pair in decoded_pairs:
-        timestamp = pair[0].timestamp
-        base_fields.append(
-            RadarField(
-                values=resample_to_grid(pair[0], target),
-                crs=WEB_MERCATOR,
-                transform=target,
-                quantity=pair[0].quantity,
-                timestamp=timestamp,
-            )
-        )
-        overlay_fields.append(
-            RadarField(
-                values=resample_to_grid(pair[1], target),
-                crs=WEB_MERCATOR,
-                transform=target,
-                quantity=pair[1].quantity,
-                timestamp=timestamp,
-            )
-        )
-    return base_fields, overlay_fields
+    overlay_history = [
+        _warped(load_odim_hdf(frame.paths[1], quantity=quantity), target) for frame in frames[:-1]
+    ]
+    overlay_history.append(_warped(overlay_latest_source, target))
+    return overlay_history, _warped(base_source, target)
 
 
-def generate_for_task(task: ForecastGenTask) -> dict[int, RadarField]:
+def _warped(source: RadarField, target: GeoTransform) -> RadarField:
+    return RadarField(
+        values=resample_to_grid(source, target),
+        crs=WEB_MERCATOR,
+        transform=target,
+        quantity=source.quantity,
+        timestamp=source.timestamp,
+    )
+
+
+def generate_for_task(task: ForecastGenTask) -> dict[int, RadarField | LayeredFrame]:
     """Load history from disk and generate all lead fields for one gen task."""
 
     forecast = task.forecast
     if forecast.layered:
-        return generate_layered_for_task(task)
+        overlay_history, base_latest = load_layered_history(task)
+        return generate_layered_forecast_fields(
+            overlay_history,
+            base_latest,
+            minutes=forecast.minutes,
+            **generation_options(forecast),
+        )
 
     fields = load_history_fields(task)
     return generate_forecast_fields(
         fields,
         minutes=forecast.minutes,
-        method=forecast.method,
         floor_level=forecast.palette.levels[0],
-        motion_grid_step=forecast.motion_grid_step,
-        motion_grid_max=forecast.motion_grid_max,
-        fast_idw=forecast.fast_idw,
-        fast_warp=forecast.fast_warp,
-        fast_motion=forecast.fast_motion,
-        warp_grid_step=forecast.warp_grid_step,
-        forecast_id=forecast.id,
+        **generation_options(forecast),
     )
 
 
-def generate_layered_for_task(task: ForecastGenTask) -> dict[int, RadarField]:
-    """Layered forecast: motion from overlay history, warp base+overlay, merge."""
+def generation_options(forecast: ForecastProduct) -> dict:
+    """Per-forecast tuning knobs shared by the plain and layered generators."""
 
-    forecast = task.forecast
-    base_history, overlay_history = load_layered_history_pairs(task)
-    return generate_layered_forecast_fields(
-        overlay_history,
-        base_history[-1],
-        overlay_history[-1],
-        minutes=forecast.minutes,
+    return dict(
         method=forecast.method,
-        floor_level=forecast.palette.levels[0],
         motion_grid_step=forecast.motion_grid_step,
         motion_grid_max=forecast.motion_grid_max,
         fast_idw=forecast.fast_idw,
@@ -185,19 +170,11 @@ def generate_forecast_fields(
     if len(fields) < 2:
         raise ValueError(f"forecast needs at least 2 history fields, got {len(fields)}")
 
-    unique_minutes = tuple(dict.fromkeys(sorted(minutes)))
+    unique_minutes = _validated_minutes(minutes)
     if not unique_minutes:
         return {}
-    if any(minute <= 0 for minute in unique_minutes):
-        raise ValueError(f"forecast minutes must be positive, got {unique_minutes!r}")
 
-    dt = (fields[-1].timestamp - fields[-2].timestamp).total_seconds() / 60.0
-    if dt <= 0:
-        raise ValueError("fields must be ordered chronologically with increasing timestamps")
-
-    generation_start = time.perf_counter()
     latest = fields[-1]
-
     if not np.isfinite(latest.values).any():
         LOGGER.info(
             "Generated transparent forecast fields for %s: latest field contains no finite %s pixels",
@@ -206,39 +183,18 @@ def generate_forecast_fields(
         )
         return _transparent_forecast_fields(latest, unique_minutes)
 
-    # Keep NaN as a radar mask: no-observation pixels. The fast path works on
-    # this plain stack directly; the pysteps path wraps it in a MaskedArray.
-    motion_stack = np.stack([field.values for field in fields])
-
-    step_start = time.perf_counter()
-    velocity = _compute_motion(
-        method,
-        motion_stack,
-        grid_step=motion_grid_step,
-        grid_max=motion_grid_max,
-        fast_idw=fast_idw,
-        fast_motion=fast_motion,
-    )
-    motion_time = time.perf_counter() - step_start
-
-    lead_steps = [minute / dt for minute in unique_minutes]
-
-    step_start = time.perf_counter()
-    forecast_stack = _extrapolate(
-        fields[-1].values, velocity, lead_steps, fast=fast_warp, grid_step=warp_grid_step
-    )
-    extrapolate_time = time.perf_counter() - step_start
-
-    _log_generation_performance(
-        forecast_id=forecast_id,
-        source_count=len(fields),
-        lead_count=len(unique_minutes),
-        field=latest,
-        total=time.perf_counter() - generation_start,
+    [forecast_stack] = _extrapolate_history(
+        fields,
+        [latest.values],
+        unique_minutes=unique_minutes,
         method=method,
         motion_grid_step=motion_grid_step,
-        motion=motion_time,
-        extrapolate=extrapolate_time,
+        motion_grid_max=motion_grid_max,
+        fast_idw=fast_idw,
+        fast_warp=fast_warp,
+        fast_motion=fast_motion,
+        warp_grid_step=warp_grid_step,
+        forecast_id=forecast_id,
     )
 
     generated: dict[int, RadarField] = {}
@@ -257,13 +213,11 @@ def generate_forecast_fields(
 
 
 def generate_layered_forecast_fields(
-    motion_fields: Sequence[RadarField],
+    overlay_history: Sequence[RadarField],
     base_latest: RadarField,
-    overlay_latest: RadarField,
     *,
     minutes: Sequence[int],
     method: str = "lucaskanade",
-    floor_level: float,
     motion_grid_step: int = 1,
     motion_grid_max: int | None = None,
     fast_idw: bool = False,
@@ -271,49 +225,105 @@ def generate_layered_forecast_fields(
     fast_motion: bool = False,
     warp_grid_step: int = 1,
     forecast_id: str | None = None,
-) -> dict[int, RadarField]:
-    """Extrapolate base+overlay with shared motion, then band-encode each lead.
+) -> dict[int, RadarField | LayeredFrame]:
+    """Extrapolate base+overlay with shared motion into layered lead pairs.
 
-    ``motion_fields`` should be the denser overlay history (MAX-Z). Both latest
-    fields are warped with that velocity and merged via
-    :func:`merge_layered_fields` so stored forecast frames render like observed
-    layered PNGs.
+    Motion is estimated from the denser ``overlay_history`` (MAX-Z); its tip
+    and ``base_latest`` are then warped with the same velocity. Each lead stays
+    a physical :class:`LayeredFrame` — the faded-overlay presentation happens
+    at colorize time, so no sentinel values are generated or stored.
     """
 
-    if len(motion_fields) < 2:
-        raise ValueError(f"forecast needs at least 2 history fields, got {len(motion_fields)}")
-
-    unique_minutes = tuple(dict.fromkeys(sorted(minutes)))
-    if not unique_minutes:
-        return {}
-    if any(minute <= 0 for minute in unique_minutes):
-        raise ValueError(f"forecast minutes must be positive, got {unique_minutes!r}")
-
-    dt = (motion_fields[-1].timestamp - motion_fields[-2].timestamp).total_seconds() / 60.0
-    if dt <= 0:
-        raise ValueError("fields must be ordered chronologically with increasing timestamps")
+    if len(overlay_history) < 2:
+        raise ValueError(f"forecast needs at least 2 history fields, got {len(overlay_history)}")
+    overlay_latest = overlay_history[-1]
     if base_latest.timestamp != overlay_latest.timestamp:
         raise ValueError(
             f"layered latest fields must share a timestamp, got "
             f"{base_latest.timestamp} vs {overlay_latest.timestamp}"
         )
-    if base_latest.timestamp != motion_fields[-1].timestamp:
-        raise ValueError(
-            f"layered latest timestamp {base_latest.timestamp} must match "
-            f"motion history tip {motion_fields[-1].timestamp}"
-        )
 
-    generation_start = time.perf_counter()
-    latest = overlay_latest
+    unique_minutes = _validated_minutes(minutes)
+    if not unique_minutes:
+        return {}
 
     if not np.isfinite(base_latest.values).any() and not np.isfinite(overlay_latest.values).any():
         LOGGER.info(
             "Generated transparent layered forecast fields for %s: latest fields contain no finite %s pixels",
-            latest.timestamp,
-            latest.quantity,
+            overlay_latest.timestamp,
+            overlay_latest.quantity,
         )
-        return _transparent_forecast_fields(latest, unique_minutes)
+        return _transparent_forecast_fields(overlay_latest, unique_minutes)
 
+    base_stack, overlay_stack = _extrapolate_history(
+        overlay_history,
+        [base_latest.values, overlay_latest.values],
+        unique_minutes=unique_minutes,
+        method=method,
+        motion_grid_step=motion_grid_step,
+        motion_grid_max=motion_grid_max,
+        fast_idw=fast_idw,
+        fast_warp=fast_warp,
+        fast_motion=fast_motion,
+        warp_grid_step=warp_grid_step,
+        forecast_id=forecast_id,
+    )
+
+    generated: dict[int, RadarField | LayeredFrame] = {}
+    for idx, minute in enumerate(unique_minutes):
+        lead_timestamp = overlay_latest.timestamp + timedelta(minutes=minute)
+        generated[minute] = LayeredFrame(
+            base=RadarField(
+                values=np.asarray(base_stack[idx], dtype=np.float32),
+                crs=base_latest.crs,
+                transform=base_latest.transform,
+                quantity=base_latest.quantity,
+                timestamp=lead_timestamp,
+            ),
+            overlay=RadarField(
+                values=np.asarray(overlay_stack[idx], dtype=np.float32),
+                crs=overlay_latest.crs,
+                transform=overlay_latest.transform,
+                quantity=overlay_latest.quantity,
+                timestamp=lead_timestamp,
+            ),
+        )
+    return generated
+
+
+def _validated_minutes(minutes: Sequence[int]) -> tuple[int, ...]:
+    unique_minutes = tuple(dict.fromkeys(sorted(minutes)))
+    if any(minute <= 0 for minute in unique_minutes):
+        raise ValueError(f"forecast minutes must be positive, got {unique_minutes!r}")
+    return unique_minutes
+
+
+def _extrapolate_history(
+    motion_fields: Sequence[RadarField],
+    warp_values: Sequence[np.ndarray],
+    *,
+    unique_minutes: tuple[int, ...],
+    method: str,
+    motion_grid_step: int,
+    motion_grid_max: int | None,
+    fast_idw: bool,
+    fast_warp: bool,
+    fast_motion: bool,
+    warp_grid_step: int,
+    forecast_id: str | None,
+) -> list[np.ndarray]:
+    """Shared core: motion from ``motion_fields``, then warp each field.
+
+    Returns one ``(leads, H, W)`` stack per entry of ``warp_values``, all
+    driven by a single velocity field (and, on the fast path, a single
+    displacement trajectory).
+    """
+
+    dt = (motion_fields[-1].timestamp - motion_fields[-2].timestamp).total_seconds() / 60.0
+    if dt <= 0:
+        raise ValueError("fields must be ordered chronologically with increasing timestamps")
+
+    generation_start = time.perf_counter()
     motion_stack = np.stack([field.values for field in motion_fields])
 
     step_start = time.perf_counter()
@@ -330,45 +340,21 @@ def generate_layered_forecast_fields(
     lead_steps = [minute / dt for minute in unique_minutes]
 
     step_start = time.perf_counter()
-    base_stack = _extrapolate(
-        base_latest.values, velocity, lead_steps, fast=fast_warp, grid_step=warp_grid_step
-    )
-    overlay_stack = _extrapolate(
-        overlay_latest.values, velocity, lead_steps, fast=fast_warp, grid_step=warp_grid_step
-    )
+    stacks = _extrapolate_many(warp_values, velocity, lead_steps, fast=fast_warp, grid_step=warp_grid_step)
     extrapolate_time = time.perf_counter() - step_start
 
     _log_generation_performance(
         forecast_id=forecast_id,
         source_count=len(motion_fields),
         lead_count=len(unique_minutes),
-        field=latest,
+        field=motion_fields[-1],
         total=time.perf_counter() - generation_start,
         method=method,
         motion_grid_step=motion_grid_step,
         motion=motion_time,
         extrapolate=extrapolate_time,
     )
-
-    generated: dict[int, RadarField] = {}
-    for idx, minute in enumerate(unique_minutes):
-        lead_timestamp = latest.timestamp + timedelta(minutes=minute)
-        base_lead = RadarField(
-            values=np.asarray(base_stack[idx], dtype=np.float32).copy(),
-            crs=base_latest.crs,
-            transform=base_latest.transform,
-            quantity=base_latest.quantity,
-            timestamp=lead_timestamp,
-        )
-        overlay_lead = RadarField(
-            values=np.asarray(overlay_stack[idx], dtype=np.float32).copy(),
-            crs=overlay_latest.crs,
-            transform=overlay_latest.transform,
-            quantity=overlay_latest.quantity,
-            timestamp=lead_timestamp,
-        )
-        generated[minute] = merge_layered_fields(base_lead, overlay_lead, floor=floor_level)
-    return generated
+    return stacks
 
 
 def _transparent_forecast_fields(latest: RadarField, minutes: Sequence[int]) -> dict[int, RadarField]:
@@ -523,18 +509,32 @@ def _coarse_lucaskanade_velocity(  # noqa: ANN202
     return _upscale_velocity(coarse, width, height)
 
 
-def _extrapolate(precip, velocity, lead_steps, *, fast: bool, grid_step: int = 1):  # noqa: ANN001, ANN202
+def _extrapolate_many(
+    values_list: Sequence[np.ndarray],
+    velocity,  # noqa: ANN001
+    lead_steps: Sequence[float],
+    *,
+    fast: bool,
+    grid_step: int = 1,
+) -> list[np.ndarray]:
+    """Extrapolate several fields with one velocity; one stack per field.
+
+    The fast path integrates the displacement trajectory once and warps every
+    field with it, so extra fields cost one ``cv2.remap`` per lead each. The
+    pysteps fallback integrates internally and simply runs once per field.
+    """
     if fast:
         from . import forecast_fast
 
-        return forecast_fast.extrapolate(
-            precip,
+        return forecast_fast.extrapolate_many(
+            values_list,
             velocity,
             lead_steps,
-            allow_nonfinite_values=bool(np.any(~np.isfinite(precip))),
+            allow_nonfinite_values=any(bool(np.any(~np.isfinite(v))) for v in values_list),
             grid_step=grid_step,
         )
-    return _extrapolation_method()(precip, velocity, lead_steps)
+    extrapolate = _extrapolation_method()
+    return [extrapolate(values, velocity, lead_steps) for values in values_list]
 
 
 def _upscale_velocity(coarse, width: int, height: int):  # noqa: ANN001, ANN202
