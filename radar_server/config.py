@@ -16,6 +16,7 @@ from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec, Rgba
 from .rendering.palettes import STANDARD_DBZH
+from .rendering.layered import render_layered_png
 from .rendering.pipeline import (
     DEFAULT_VARIANTS,
     Bounds,
@@ -174,6 +175,15 @@ DEFAULT_RENDER_PIPELINE = RenderPipeline(
     render_composite=render_composite_png,
 )
 
+# Solid base + faded overlay-only echoes (Czechia CAPPI under MAX-Z). The
+# composite entry point expects exactly two inputs in (base, overlay) order;
+# single-file falls back to the ordinary PNG path.
+LAYERED_RENDER_PIPELINE = RenderPipeline(
+    id="layered_png",
+    render_single=render_radar_png,
+    render_composite=render_layered_png,
+)
+
 
 @dataclass(frozen=True)
 class RenderProfile:
@@ -192,6 +202,9 @@ NO_OXIPNG_RENDER = RenderProfile(optimize=False)
 # Tints the no-coverage (NaN) area with a faint black wash so the radar footprint
 # reads clearly on the map; clear-sky and below-threshold cells stay transparent.
 NODATA_TINT_RENDER = RenderProfile(nodata_fill=Rgba(0, 0, 0, 0.15))
+
+# CAPPI as solid ground-rain base, MAX-Z-only echoes at reduced opacity on top.
+LAYERED_RENDER = RenderProfile(pipeline=LAYERED_RENDER_PIPELINE)
 
 
 @dataclass(frozen=True)
@@ -473,6 +486,13 @@ chmi_current = HttpDirectorySource(
     polling=CHMI_SMART_POLLING,
 )
 
+chmi_cappi = HttpDirectorySource(
+    id="chmi_cappi",
+    label="CHMI pseudoCAPPI 2km composites",
+    base_url="https://opendata.chmi.cz/meteorology/weather/radar/composite/pseudocappi2km/hdf5/",
+    polling=CHMI_SMART_POLLING,
+)
+
 ord_api = OrdApiSource(
     id="ord_api",
     label="EUMETNET Open Radar Data API",
@@ -560,6 +580,15 @@ CZECHIA_PUBLISH_DELAY_SECONDS = 10
 IT_SRI_PUBLISH_DELAY_SECONDS = 8 * 60
 
 
+cz_cappi = InputConfig(
+    id="cz_cappi",
+    label="Czechia CHMI pseudoCAPPI 2km",
+    source=chmi_cappi,
+    local_dir=DATA_DIR / "cz" / "chmi_cappi",
+    quantity="DBZH",
+    odim_product="PCAPPI",
+)
+
 cz_maxz = InputConfig(
     id="cz_maxz",
     label="Czechia CHMI MAX-Z composite",
@@ -596,15 +625,20 @@ it_sri_arco = InputConfig(
     odim_product="COMP",
 )
 
+# CAPPI (solid ground rain) under MAX-Z-only echoes at reduced opacity. Both
+# CHMI feeds share a pixel-aligned grid and 5-minute cadence; the product waits
+# for both files at a timestamp before rendering. Forecast still fmax-composites
+# the pair (≡ MAX-Z) and renders solid until a layered forecast lands.
 cz_product = ProductConfig(
     id="cz",
     label="Czechia radar",
-    inputs=inputs(cz_maxz),
+    inputs=inputs(cz_cappi, cz_maxz),
     output_dir=OUTPUT_DIR / "cz",
     geo_bounds=CZECHIA_BOUNDS,
     center=CZECHIA_CENTER,
     publish_delay_seconds=CZECHIA_PUBLISH_DELAY_SECONDS,
     base_name=timestamped_base("radar_cz"),
+    render=LAYERED_RENDER,
     priority=0,
 )
 
@@ -1004,8 +1038,8 @@ central_europe_forecast = ForecastProduct(
 )
 
 
-SOURCES: tuple[SourceConfig, ...] = (chmi_current, ord_api, arco_radar)
-INPUTS: tuple[InputConfig, ...] = (cz_maxz, opera_dbzh, it_sri_arco)
+SOURCES: tuple[SourceConfig, ...] = (chmi_current, chmi_cappi, ord_api, arco_radar)
+INPUTS: tuple[InputConfig, ...] = (cz_cappi, cz_maxz, opera_dbzh, it_sri_arco)
 COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     cz_product,
     de_product,

@@ -54,3 +54,17 @@ def test_write_png_comment_preserves_image_data(tmp_path: Path) -> None:
     assert _comment(commented) == comment
     assert _idat_payload(commented) == _idat_payload(plain)
     assert commented.stat().st_size - plain.stat().st_size == len("Comment") + 1 + len(comment) + 12
+
+
+def test_write_png_emits_per_color_alpha_table(tmp_path: Path) -> None:
+    image = IndexedImage(
+        indices=np.array([[0, 1], [1, 2]], dtype=np.uint8),
+        palette=[(255, 0, 0), (0, 255, 0)],
+        transparent_index=2,
+        palette_alphas=(178, 255),
+    )
+    path = tmp_path / "alpha.png"
+    write_png(image, path, optimize=False)
+
+    trns = next(data for chunk_type, data in _png_chunks(path) if chunk_type == b"tRNS")
+    assert trns == bytes([178, 255, 0])

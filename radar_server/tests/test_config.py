@@ -7,12 +7,26 @@ from radar_server.config import (
     CONFIG,
     DATA_DIR,
     FORECAST_PRODUCTS,
+    INPUTS,
+    LAYERED_RENDER_PIPELINE,
     PRODUCTS,
     ForecastProduct,
+    cz_cappi,
     cz_forecast,
+    cz_maxz,
     cz_product,
 )
 from radar_server.__main__ import _with_optimize
+
+
+def test_czechia_uses_layered_cappi_under_maxz() -> None:
+    assert cz_product.inputs == (cz_cappi, cz_maxz)
+    assert cz_product.render.pipeline is LAYERED_RENDER_PIPELINE
+    assert cz_product.render.palette is cz_forecast.palette
+    assert cz_cappi in INPUTS and cz_maxz in INPUTS
+    assert cz_cappi.source.id == "chmi_cappi"
+    assert cz_maxz.source.id == "chmi_current"
+    assert {source.id for source in CONFIG.sources} >= {"chmi_cappi", "chmi_current"}
 
 
 def test_forecast_product_reuses_parent_settings() -> None:

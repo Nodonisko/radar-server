@@ -19,7 +19,7 @@ from pyproj import Transformer
 from .core import GeoTransform, RadarField
 
 # Products that represent a 2D composite we can render directly.
-_COMPOSITE_PRODUCTS = ("MAX", "MAXZ", "COMP", "SURF")
+_COMPOSITE_PRODUCTS = ("MAX", "MAXZ", "COMP", "SURF", "PCAPPI")
 
 
 def _decode_attr(value) -> str:

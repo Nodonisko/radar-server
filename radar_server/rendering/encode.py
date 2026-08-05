@@ -131,15 +131,30 @@ def _to_pil(image: IndexedImage) -> Image.Image:
 def _transparency(image: IndexedImage) -> int | bytes:
     """PIL ``transparency`` arg: a single index, or per-index alpha bytes.
 
-    With no nodata fill we keep the single-index form so output stays identical
-    to the historical encoder. With a nodata fill we emit a full ``tRNS`` table:
-    opaque palette colors, a fully transparent slot, and the nodata slot's alpha.
+    The single-index form is kept when every palette color is opaque and there
+    is no nodata fill, so ordinary product output stays identical to the
+    historical encoder. Otherwise a full ``tRNS`` table is emitted: per-color
+    alphas (defaulting to opaque), a fully transparent clear-sky slot, and —
+    when present — the nodata slot's alpha.
     """
-    if image.nodata_index is None or image.nodata_rgba is None:
+    needs_table = image.palette_alphas is not None or (
+        image.nodata_index is not None and image.nodata_rgba is not None
+    )
+    if not needs_table:
         return image.transparent_index
-    alpha = bytearray([255] * len(image.palette))
+
+    if image.palette_alphas is None:
+        alpha = bytearray([255] * len(image.palette))
+    else:
+        if len(image.palette_alphas) != len(image.palette):
+            raise ValueError(
+                f"palette_alphas ({len(image.palette_alphas)}) must match "
+                f"palette ({len(image.palette)})"
+            )
+        alpha = bytearray(image.palette_alphas)
     alpha.append(0)  # transparent_index: fully transparent
-    alpha.append(image.nodata_rgba[3])  # nodata_index: partial alpha
+    if image.nodata_index is not None and image.nodata_rgba is not None:
+        alpha.append(image.nodata_rgba[3])  # nodata_index: partial alpha
     return bytes(alpha)
 
 

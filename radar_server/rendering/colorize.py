@@ -24,6 +24,9 @@ class IndexedImage:
     (NaN) cells should render with a partially transparent fill instead of being
     fully transparent; when ``nodata_index`` is ``None`` NaN cells fold into
     ``transparent_index``.
+
+    ``palette_alphas``, when set, is a per-color 8-bit alpha table (same length
+    as ``palette``). ``None`` means every color is fully opaque.
     """
 
     indices: np.ndarray  # (H, W) uint8
@@ -31,6 +34,7 @@ class IndexedImage:
     transparent_index: int
     nodata_index: Optional[int] = None
     nodata_rgba: Optional[Tuple[int, int, int, int]] = None
+    palette_alphas: Optional[Tuple[int, ...]] = None
 
 
 def colorize(
@@ -56,6 +60,7 @@ def colorize(
 
     transparent_index = ncolors
     indices = idx.astype(np.uint8)
+    palette_alphas = palette.alpha_bytes
 
     if nodata_fill is None:
         # Default: missing data and below-floor both fully transparent.
@@ -64,6 +69,7 @@ def colorize(
             indices=indices,
             palette=palette.rgb,
             transparent_index=transparent_index,
+            palette_alphas=palette_alphas,
         )
 
     # Missing-data cells get their own partially transparent fill; clear-sky and
@@ -77,4 +83,5 @@ def colorize(
         transparent_index=transparent_index,
         nodata_index=nodata_index,
         nodata_rgba=(nodata_fill.r, nodata_fill.g, nodata_fill.b, nodata_fill.alpha_byte),
+        palette_alphas=palette_alphas,
     )
