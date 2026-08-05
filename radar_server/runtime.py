@@ -308,7 +308,7 @@ def run_forecasts_once(
             render_forecast_field(
                 fields_by_minute[minute],
                 forecast.output_dir,
-                forecast.palette,
+                forecast.render_palette,
                 base=base,
                 minute=minute,
                 variants=forecast.render_variants,

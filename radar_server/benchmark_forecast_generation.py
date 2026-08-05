@@ -25,7 +25,12 @@ import numpy as np
 
 from . import config as radar_config
 from .config import ForecastProduct, InputConfig, ProductConfig, cz_forecast
-from .forecast_generation import generate_forecast_fields, load_history_fields
+from .forecast_generation import (
+    generate_forecast_fields,
+    generate_layered_forecast_fields,
+    load_history_fields,
+    load_layered_history_pairs,
+)
 from .logging_config import configure_logging
 from .queueing import ForecastGenTask, HistoryFrame
 from .rendering.core import RadarField
@@ -309,7 +314,11 @@ def _scan_input_paths(input_config: InputConfig) -> dict[datetime, tuple[Path, .
 
 def _timed_load(task: ForecastGenTask) -> tuple[list[RadarField], float]:
     start = time.perf_counter()
-    fields = load_history_fields(task)
+    if task.forecast.layered:
+        _base_history, overlay_history = load_layered_history_pairs(task)
+        fields = overlay_history
+    else:
+        fields = load_history_fields(task)
     return fields, time.perf_counter() - start
 
 
@@ -361,6 +370,15 @@ def _generate(
     fields: Sequence[RadarField],
     options: dict[str, Any],
 ) -> dict[int, RadarField]:
+    if task.forecast.layered:
+        base_history, overlay_history = load_layered_history_pairs(task)
+        return generate_layered_forecast_fields(
+            overlay_history,
+            base_history[-1],
+            overlay_history[-1],
+            forecast_id=task.forecast.id,
+            **options,
+        )
     return generate_forecast_fields(fields, forecast_id=task.forecast.id, **options)
 
 
@@ -370,6 +388,15 @@ def _load_and_generate(
     options: dict[str, Any],
 ) -> dict[int, RadarField]:
     del fields
+    if task.forecast.layered:
+        base_history, overlay_history = load_layered_history_pairs(task)
+        return generate_layered_forecast_fields(
+            overlay_history,
+            base_history[-1],
+            overlay_history[-1],
+            forecast_id=task.forecast.id,
+            **options,
+        )
     loaded = load_history_fields(task)
     return generate_forecast_fields(loaded, forecast_id=task.forecast.id, **options)
 

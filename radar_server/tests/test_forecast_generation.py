@@ -8,10 +8,23 @@ import numpy as np
 import pytest
 
 import radar_server.forecast_generation as forecast_generation
-from radar_server.config import ForecastProduct, GeoBounds, GeoCenter, ProductConfig, cz_maxz, timestamped_base
-from radar_server.forecast_generation import generate_for_task, generate_forecast_fields
+from radar_server.config import (
+    ForecastProduct,
+    GeoBounds,
+    GeoCenter,
+    LAYERED_RENDER,
+    ProductConfig,
+    cz_maxz,
+    timestamped_base,
+)
+from radar_server.forecast_generation import (
+    generate_for_task,
+    generate_forecast_fields,
+    generate_layered_forecast_fields,
+)
 from radar_server.queueing import ForecastGenTask, HistoryFrame
 from radar_server.rendering.core import WEB_MERCATOR, GeoTransform, RadarField
+from radar_server.rendering.layered import OVERLAY_VALUE_OFFSET
 
 
 def _field(values: np.ndarray, timestamp: datetime) -> RadarField:
@@ -226,6 +239,91 @@ def test_generate_for_task_wires_forecast_settings(monkeypatch, tmp_path: Path) 
     assert captured["fast_warp"] == forecast.fast_warp
     assert captured["fast_motion"] == forecast.fast_motion
     assert captured["warp_grid_step"] == forecast.warp_grid_step
+
+
+def test_generate_for_task_routes_layered_parent(monkeypatch, tmp_path: Path) -> None:  # noqa: ANN001
+    parent = ProductConfig(
+        id="cz",
+        label="Czechia",
+        inputs=(cz_maxz, cz_maxz),
+        output_dir=tmp_path / "out",
+        geo_bounds=GeoBounds(0, 0, 0, 0),
+        center=GeoCenter(0.0, 0.0),
+        publish_delay_seconds=10,
+        base_name=timestamped_base("radar_cz"),
+        render=LAYERED_RENDER,
+    )
+    forecast = ForecastProduct(id="cz_forecast", parent=parent, minutes=(10,), field_dir=tmp_path / "fields")
+    issue = datetime(2026, 6, 5, 21, 0)
+    task = ForecastGenTask(
+        forecast=forecast,
+        issue_timestamp=issue,
+        history=(HistoryFrame(timestamp=issue, paths=(tmp_path / "a.hdf", tmp_path / "b.hdf")),),
+    )
+    captured: dict = {}
+
+    def fake_layered(load_task):  # noqa: ANN001
+        captured["layered_task"] = load_task
+        return {10: _field(np.zeros((2, 2)), issue)}
+
+    monkeypatch.setattr(forecast_generation, "generate_layered_for_task", fake_layered)
+
+    result = generate_for_task(task)
+
+    assert captured["layered_task"] is task
+    assert sorted(result) == [10]
+
+
+def test_generate_layered_forecast_fields_merges_dual_warp(monkeypatch) -> None:  # noqa: ANN001
+    captured: dict = {}
+
+    def fake_motion_method(method: str):
+        def fake_motion(input_images, **kwargs):  # noqa: ANN001, ANN003
+            captured["motion_input"] = input_images
+            return np.zeros((2, *input_images.shape[1:]), dtype=np.float32)
+
+        return fake_motion
+
+    def fake_extrapolation_method():
+        def fake_extrapolate(precip, velocity, timesteps):  # noqa: ANN001
+            captured.setdefault("precips", []).append(np.array(precip, copy=True))
+            # Identity warp: return the input precip for each lead.
+            return np.stack([np.array(precip, copy=True) for _ in timesteps])
+
+        return fake_extrapolate
+
+    monkeypatch.setattr(forecast_generation, "_motion_method", fake_motion_method)
+    monkeypatch.setattr(forecast_generation, "_extrapolation_method", fake_extrapolation_method)
+
+    t0 = datetime(2026, 6, 5, 21, 0)
+    t1 = t0 + timedelta(minutes=5)
+    # Motion/history tip: MAX-Z denser than CAPPI.
+    motion = [
+        _field(np.array([[40.0, -np.inf], [-np.inf, 20.0]]), t0),
+        _field(np.array([[40.0, 36.0], [-np.inf, 20.0]]), t1),
+    ]
+    base_latest = _field(np.array([[20.0, -np.inf], [-np.inf, 20.0]]), t1)
+    overlay_latest = _field(np.array([[40.0, 36.0], [-np.inf, 20.0]]), t1)
+
+    generated = generate_layered_forecast_fields(
+        motion,
+        base_latest,
+        overlay_latest,
+        minutes=(10,),
+        floor_level=4.0,
+        fast_warp=False,
+        fast_motion=False,
+        fast_idw=False,
+    )
+
+    assert sorted(generated) == [10]
+    assert len(captured["precips"]) == 2  # base then overlay
+    values = generated[10].values
+    assert values[0, 0] == pytest.approx(20.0)  # solid CAPPI where both echo
+    assert values[0, 1] == pytest.approx(36.0 - OVERLAY_VALUE_OFFSET)  # MAX-Z-only faded band
+    assert np.isneginf(values[1, 0])
+    assert values[1, 1] == pytest.approx(20.0)
+    assert generated[10].timestamp == t1 + timedelta(minutes=10)
 
 
 def test_coarse_motion_matches_full_resolution() -> None:

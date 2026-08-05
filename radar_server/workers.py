@@ -213,7 +213,7 @@ class RenderWorker(_QueueWorker):
         render_forecast_field(
             stored.field,
             forecast.output_dir,
-            forecast.palette,
+            forecast.render_palette,
             base=task.base,
             minute=task.minute,
             variants=forecast.render_variants,

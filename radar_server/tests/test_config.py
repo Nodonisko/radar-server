@@ -23,6 +23,9 @@ def test_czechia_uses_layered_cappi_under_maxz() -> None:
     assert cz_product.inputs == (cz_cappi, cz_maxz)
     assert cz_product.render.pipeline is LAYERED_RENDER_PIPELINE
     assert cz_product.render.palette is cz_forecast.palette
+    assert cz_forecast.layered
+    assert cz_forecast.render_palette is not cz_forecast.palette
+    assert len(cz_forecast.render_palette.colors) == 2 * len(cz_forecast.palette.colors)
     assert cz_cappi in INPUTS and cz_maxz in INPUTS
     assert cz_cappi.source.id == "chmi_cappi"
     assert cz_maxz.source.id == "chmi_current"

@@ -38,6 +38,10 @@ from .reproject import resample_to_grid
 
 LOGGER = logging.getLogger(__name__)
 
+# RenderPipeline.id for products that emit CAPPI-under-MAX-Z layered PNGs.
+# Forecast generation/rendering keys off this to keep motion/warp/palette in sync.
+LAYERED_PIPELINE_ID = "layered_png"
+
 # Shift overlay-only dBZ into a band well below any base palette floor so the
 # two ranges never overlap. 1000 keeps ~15 four-dBZ steps comfortably clear of
 # the solid band starting at 4 dBZ.
@@ -45,6 +49,10 @@ OVERLAY_VALUE_OFFSET = 1000.0
 
 # "Reduced opacity by 60%" relative to the solid base colors.
 OVERLAY_OPACITY = 0.4
+
+
+def is_layered_pipeline(pipeline_id: str) -> bool:
+    return pipeline_id == LAYERED_PIPELINE_ID
 
 
 def build_layered_palette(

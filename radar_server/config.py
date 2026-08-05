@@ -16,7 +16,12 @@ from typing import Callable, Iterable, Literal, Protocol, Sequence, Union
 
 from .rendering.core import PaletteSpec, Rgba
 from .rendering.palettes import STANDARD_DBZH
-from .rendering.layered import render_layered_png
+from .rendering.layered import (
+    LAYERED_PIPELINE_ID,
+    build_layered_palette,
+    is_layered_pipeline,
+    render_layered_png,
+)
 from .rendering.pipeline import (
     DEFAULT_VARIANTS,
     Bounds,
@@ -179,7 +184,7 @@ DEFAULT_RENDER_PIPELINE = RenderPipeline(
 # composite entry point expects exactly two inputs in (base, overlay) order;
 # single-file falls back to the ordinary PNG path.
 LAYERED_RENDER_PIPELINE = RenderPipeline(
-    id="layered_png",
+    id=LAYERED_PIPELINE_ID,
     render_single=render_radar_png,
     render_composite=render_layered_png,
 )
@@ -414,7 +419,15 @@ class ForecastProduct:
 
     @property
     def palette(self) -> PaletteSpec:
+        """Physical palette (dBZ floor / motion). Not the layered render palette."""
         return self.parent.render.palette
+
+    @property
+    def render_palette(self) -> PaletteSpec:
+        """Palette used when colorizing stored forecast fields to PNG."""
+        if is_layered_pipeline(self.parent.render.pipeline.id):
+            return build_layered_palette(self.palette)
+        return self.palette
 
     @property
     def geo_bounds(self) -> GeoBounds:
@@ -439,6 +452,10 @@ class ForecastProduct:
     @property
     def retention(self) -> RetentionPolicy:
         return self.parent.retention
+
+    @property
+    def layered(self) -> bool:
+        return is_layered_pipeline(self.parent.render.pipeline.id)
 
 
 def inputs(*items: InputConfig) -> tuple[InputConfig, ...]:
@@ -627,8 +644,8 @@ it_sri_arco = InputConfig(
 
 # CAPPI (solid ground rain) under MAX-Z-only echoes at reduced opacity. Both
 # CHMI feeds share a pixel-aligned grid and 5-minute cadence; the product waits
-# for both files at a timestamp before rendering. Forecast still fmax-composites
-# the pair (≡ MAX-Z) and renders solid until a layered forecast lands.
+# for both files at a timestamp before rendering. Forecast estimates motion from
+# MAX-Z history, warps both fields, then band-encodes the same layered merge.
 cz_product = ProductConfig(
     id="cz",
     label="Czechia radar",
