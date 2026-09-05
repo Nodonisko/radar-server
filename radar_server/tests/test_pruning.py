@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from radar_server.config import ForecastProduct, GeoBounds, GeoCenter, ProductConfig, RetentionPolicy, cz_maxz, timestamped_base
@@ -9,7 +9,7 @@ from radar_server.pruning import prune_input_files, prune_product_outputs
 
 
 def _product(tmp_path: Path, *, retention: RetentionPolicy | None = None) -> ProductConfig:
-    return ProductConfig(
+    product = ProductConfig(
         id="test",
         label="Test",
         inputs=(cz_maxz,),
@@ -18,8 +18,34 @@ def _product(tmp_path: Path, *, retention: RetentionPolicy | None = None) -> Pro
         center=GeoCenter(0.0, 0.0),
         publish_delay_seconds=260,
         base_name=timestamped_base("radar_test"),
-        retention=retention or RetentionPolicy(),
     )
+    return replace(product, retention=retention) if retention is not None else product
+
+
+def test_default_retention_keeps_48h_observed_and_2h_forecasts(tmp_path: Path) -> None:
+    product = _product(tmp_path / "out" / "test")
+    forecast = ForecastProduct(id="test_forecast", parent=product)
+    now = datetime(2026, 6, 5, 21, 5)
+    expected_deleted = set()
+    expected_kept = set()
+    for age_minutes in (120, 125, 24 * 60, 48 * 60, 48 * 60 + 5):
+        timestamp = now - timedelta(minutes=age_minutes)
+        for output_dir, suffix, keep_minutes in (
+            (product.output_dir, "", 48 * 60),
+            (forecast.output_dir, "_fct10", 120),
+        ):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            base = f"radar_test_{timestamp:%Y%m%d_%H%M}{suffix}"
+            for extension in (".json", "_overlay.png", "_overlay_small.png"):
+                path = output_dir / f"{base}{extension}"
+                path.write_bytes(b"x")
+                (expected_deleted if age_minutes > keep_minutes else expected_kept).add(path)
+
+    result = prune_product_outputs([product], forecasts=[forecast], now=now)
+
+    assert set(result.deleted) == expected_deleted
+    assert all(not path.exists() for path in expected_deleted)
+    assert all(path.exists() for path in expected_kept)
 
 
 def test_prune_input_files_deletes_old_matching_files_only(tmp_path: Path) -> None:

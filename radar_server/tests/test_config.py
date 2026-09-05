@@ -41,9 +41,14 @@ def test_forecast_product_reuses_parent_settings() -> None:
     assert cz_forecast.geo_bounds is cz_product.geo_bounds
     assert cz_forecast.render_variants == cz_product.render.variants
     assert cz_forecast.optimize == cz_product.render.optimize
-    assert cz_forecast.retention is cz_product.retention
     assert cz_forecast.output_dir == cz_product.output_dir.parent / "forecast" / "cz"
     assert cz_forecast.field_dir == DATA_DIR / "cz" / "forecast_fields"
+
+
+def test_observed_history_does_not_extend_backfill_or_forecast_retention() -> None:
+    assert all(product.retention.keep_for_seconds == 48 * 3600 for product in PRODUCTS)
+    assert all(input_config.retention.keep_for_seconds == 7200 for input_config in INPUTS)
+    assert all(forecast.retention.keep_for_seconds == 7200 for forecast in FORECAST_PRODUCTS)
 
 
 def test_forecast_product_variant_override(tmp_path: Path) -> None:

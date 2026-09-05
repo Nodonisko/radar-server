@@ -244,21 +244,20 @@ MQTT / polling (main thread, networking only)
 
 ## Retention
 
-Default retention is 2 hours:
+Default retention depends on the data:
 
-```python
-RetentionPolicy(keep_for_seconds=7200)
-```
+- Observed images and JSON sidecars in `radar_server/output/<product>/`: 48 hours
+  (`ProductConfig.retention`).
+- Forecast images, sidecars, and fields: 2 hours (`ForecastProduct.retention`),
+  independent of the parent observed product.
+- Input files, the local input index scan window, and polling/backfill lookback:
+  2 hours (`InputConfig.retention`).
 
-Retention applies to:
+Observed history accumulates as the server runs; startup and scheduled backfill
+keep their existing two-hour window and do not fetch 48 hours of history.
 
-- input files in `radar_server/data/`
-- output files in `radar_server/output/`
-- forecast fields in `data/<parent>/forecast_fields/`
-- local input index scan window
-- polling lookback window
-
-Set `keep_for_seconds=None` to disable retention for a specific input/product.
+Set `retention=RetentionPolicy(keep_for_seconds=None)` to disable retention for a
+specific input, observed product, or forecast product.
 
 ## Rendering
 

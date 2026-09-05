@@ -396,7 +396,8 @@ class ProductConfig:
     render: RenderProfile = RenderProfile()
     priority: int = 100
     warn_if_pending_after_seconds: int = 3600
-    retention: RetentionPolicy = RetentionPolicy()
+    # Accumulate observed images independently of the input/backfill window.
+    retention: RetentionPolicy = RetentionPolicy(keep_for_seconds=48 * 3600)
     enabled: bool = True
 
 
@@ -446,6 +447,8 @@ class ForecastProduct:
     # (~0.08 dBZ at 2). 1 keeps the full-resolution trajectory. Only applies on
     # the fast_warp path.
     warp_grid_step: int = 2
+    # Forecast outputs and fields keep their shorter window independently.
+    retention: RetentionPolicy = RetentionPolicy()
 
     def __post_init__(self) -> None:
         if self.field_dir is None:
@@ -479,10 +482,6 @@ class ForecastProduct:
     @property
     def nodata_fill(self) -> Rgba | None:
         return self.parent.render.nodata_fill
-
-    @property
-    def retention(self) -> RetentionPolicy:
-        return self.parent.retention
 
     @property
     def layered(self) -> bool:
