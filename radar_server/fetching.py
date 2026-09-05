@@ -23,10 +23,12 @@ from .config import (
     HttpDirectorySource,
     InputConfig,
     OrdApiSource,
+    S3BucketSource,
 )
 from .sources import arco
 from .sources import http_directory
 from .sources import ord as ord_source
+from .sources import s3_bucket
 from .sources.base import (
     CHUNK_SIZE,
     FetchError,
@@ -78,6 +80,8 @@ def discover_remote_files(
         files = http_directory.discover(input_config, source)
     elif isinstance(source, OrdApiSource):
         files = ord_source.discover(input_config, source, now=now, limit=limit)
+    elif isinstance(source, S3BucketSource):
+        files = s3_bucket.discover(input_config, source, now=now, limit=limit)
     elif isinstance(source, ArcoZarrSource):
         files = arco.discover(input_config, source, now=now, limit=limit)
     else:

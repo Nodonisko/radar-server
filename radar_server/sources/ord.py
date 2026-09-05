@@ -87,11 +87,10 @@ def _discover_location(
     now: datetime | None,
 ) -> list[RemoteInputFile]:
     url = f"{source.api_base_url}/collections/observations/locations/{query.location_id}"
-    lookback_minutes = max(query.lookback_minutes, _input_lookback_minutes(input_config))
     payload = request_json(
         url,
         params={
-            "datetime": _datetime_window(now, lookback_minutes),
+            "datetime": _datetime_window(input_config, now),
             "standard_name": query.standard_name,
             "format": query.fmt,
             "method": query.method,
@@ -109,12 +108,12 @@ def _discover_items(
     now: datetime | None,
     limit: int | None,
 ) -> list[RemoteInputFile]:
-    lookback_minutes = max(query.lookback_minutes, _input_lookback_minutes(input_config))
+    datetime_window = _datetime_window(input_config, now)
     payload = request_json(
         f"{source.api_base_url}/collections/observations/items",
         params={
             "bbox": _format_bounds(query.bbox),
-            "datetime": _datetime_window(now, lookback_minutes),
+            "datetime": datetime_window,
             "standard-name": query.standard_name,
             "format": query.fmt,
             "method": query.method,
@@ -135,7 +134,7 @@ def _discover_items(
                 with_query_params(
                     data_url,
                     {
-                        "datetime": _datetime_window(now, lookback_minutes),
+                        "datetime": datetime_window,
                         "format": query.fmt,
                         "method": query.method,
                     },
@@ -185,16 +184,17 @@ def _headers(source: OrdApiSource) -> dict[str, str]:
     return {source.api_key_header: api_key}
 
 
-def _input_lookback_minutes(input_config: InputConfig) -> int:
+def _datetime_window(input_config: InputConfig, now: datetime | None) -> str:
+    """ORD ``datetime`` range = input retention window ending at ``now``."""
+
     keep_for = input_config.retention.keep_for_seconds
     if keep_for is None:
-        return 0
-    return max(1, int(keep_for // 60))
-
-
-def _datetime_window(now: datetime | None, lookback_minutes: int) -> str:
+        raise ValueError(
+            f"ORD input {input_config.id!r} needs retention.keep_for_seconds "
+            "to bound the datetime query window"
+        )
     end = as_utc(now or datetime.now(timezone.utc))
-    start = end - timedelta(minutes=lookback_minutes)
+    start = end - timedelta(seconds=keep_for)
     return f"{_format_time(start)}/{_format_time(end)}"
 
 

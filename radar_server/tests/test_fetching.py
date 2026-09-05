@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import numpy as np
 from numcodecs import Blosc
 
 import radar_server.fetching as fetching
-from radar_server.config import RetentionPolicy, cz_maxz, it_sri_arco
+from radar_server.config import RetentionPolicy, cz_maxz, it_sri_arco, opera_dbzh_s3
 from radar_server.fetching import (
     RemoteInputFile,
     SkippableFetchError,
@@ -17,6 +17,7 @@ from radar_server.fetching import (
 )
 from radar_server.rendering.decode import load_odim_hdf
 from radar_server.sources import arco
+from radar_server.sources import s3_bucket
 
 
 _FAKE_GEOREF = {
@@ -131,6 +132,42 @@ def test_download_remote_file_dispatches_arco(monkeypatch, tmp_path) -> None:
 
     local = download_remote_file(remote)
     assert local.path.exists() and local.downloaded is True
+
+
+def test_discover_s3_bucket_lists_opera_composites(monkeypatch, tmp_path) -> None:
+    input_config = replace(opera_dbzh_s3, local_dir=tmp_path, enabled=True)
+    list_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+      <Contents><Key>2026/08/07/OPERA/COMP/OPERA@20260807T1305@0@DBZH.h5</Key></Contents>
+      <Contents><Key>2026/08/07/OPERA/COMP/OPERA@20260807T1310@0@DBZH.h5</Key></Contents>
+      <Contents><Key>2026/08/07/OPERA/COMP/OPERA@20260807T1310@0@ACRR.h5</Key></Contents>
+      <Contents><Key>2026/08/07/OPERA/COMP/OPERA@20260807T1310@0@DBZH.tiff</Key></Contents>
+      <IsTruncated>false</IsTruncated>
+    </ListBucketResult>
+    """
+    calls: list[str] = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append(url)
+        return SimpleNamespace(content=list_xml.encode(), status_code=200)
+
+    monkeypatch.setattr(s3_bucket, "request", fake_request)
+
+    files = s3_bucket.discover(
+        input_config,
+        input_config.source,
+        now=datetime(2026, 8, 7, 13, 15, tzinfo=timezone.utc),
+        limit=None,
+    )
+
+    assert [f.filename for f in files] == [
+        "OPERA@20260807T1305@0@DBZH.h5",
+        "OPERA@20260807T1310@0@DBZH.h5",
+    ]
+    assert files[-1].url.endswith(
+        "/openradar-24h/2026/08/07/OPERA/COMP/OPERA@20260807T1310@0@DBZH.h5"
+    )
+    assert any("prefix=2026%2F08%2F07%2FOPERA%2FCOMP%2F" in url for url in calls)
 
 
 def test_sync_input_filters_discovered_files_outside_retention(monkeypatch, tmp_path) -> None:

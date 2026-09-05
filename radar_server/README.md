@@ -210,6 +210,11 @@ MQTT / polling (main thread, networking only)
 - OPERA live updates use MQTT topic:
   `ORD/eu.eumetnet/0-20010-0-OPERA/DBZH`.
 - API key is sent as header `apikey`.
+- Dormant backup: `opera_dbzh_s3` discovers the same OPERA DBZH composites via
+  anonymous ListObjectsV2 on CloudFerro `openradar-24h`
+  (`https://s3.waw3-1.cloudferro.com/openradar-24h/...`). Disabled and not in
+  `SOURCES`; see the comment on that input in `config.py` to plug it in when
+  the ORD API is unavailable.
 - The Italian DPC composite uses the MeteoHub ARCO Zarr store (`radar.zarr`,
   variable `RR`), read over HTTP with basic auth (`ARCO_USERNAME` +
   `ARCO_ACCESS_KEY`). The data frontier is the store's `last_valid` attribute;

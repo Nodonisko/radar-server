@@ -15,6 +15,9 @@ from radar_server.config import (
     cz_forecast,
     cz_maxz,
     cz_product,
+    opera_dbzh,
+    opera_dbzh_s3,
+    ord_s3,
 )
 from radar_server.__main__ import _with_optimize
 
@@ -72,6 +75,15 @@ def test_config_wires_every_product_to_a_forecast() -> None:
     assert parent_ids == {product.id for product in CONFIG.products}
     assert all(forecast.history_frames == 3 for forecast in FORECAST_PRODUCTS)
     assert all(forecast.method == "lucaskanade" for forecast in FORECAST_PRODUCTS)
+
+
+def test_opera_s3_backup_input_is_dormant() -> None:
+    assert opera_dbzh_s3 in INPUTS
+    assert opera_dbzh_s3.enabled is False
+    assert opera_dbzh_s3.source is ord_s3
+    assert opera_dbzh_s3.local_dir == opera_dbzh.local_dir
+    assert ord_s3 not in CONFIG.sources
+    assert all(product_input is not opera_dbzh_s3 for product in PRODUCTS for product_input in product.inputs)
 
 
 def test_oxipng_disabled_for_selected_country_products() -> None:

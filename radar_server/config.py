@@ -247,6 +247,17 @@ class OrdApiSource:
 
 
 @dataclass(frozen=True)
+class S3BucketSource:
+    """Public S3-compatible object store (anonymous ListObjectsV2 + GET)."""
+
+    id: str
+    label: str
+    endpoint_url: str
+    bucket: str
+    polling: SmartPollingPolicy = SmartPollingPolicy()
+
+
+@dataclass(frozen=True)
 class ArcoZarrSource:
     """Analysis-Ready Cloud-Optimized (Zarr) radar store, read over HTTP.
 
@@ -277,7 +288,7 @@ class ArcoZarrSource:
         return username, key
 
 
-SourceConfig = Union[HttpDirectorySource, OrdApiSource, ArcoZarrSource]
+SourceConfig = Union[HttpDirectorySource, OrdApiSource, S3BucketSource, ArcoZarrSource]
 
 
 @dataclass(frozen=True)
@@ -288,6 +299,9 @@ class OrdItemsQuery:
     download URLs using each feature's ``properties.data`` link. ORD's actual
     HTTP parameters are hyphenated, e.g. ``standard-name`` and
     ``naming-authority``.
+
+    The ``datetime`` query window follows the input's
+    ``retention.keep_for_seconds``.
     """
 
     bbox: GeoBounds
@@ -296,19 +310,42 @@ class OrdItemsQuery:
     method: str = "scan"
     naming_authority: str | None = None
     platform_code_prefixes: tuple[str, ...] = ()
-    lookback_minutes: int = 30
     notes: str = ""
 
 
 @dataclass(frozen=True)
 class OrdLocationQuery:
-    """ORD API query for collections/observations/locations/{location_id}."""
+    """ORD API query for collections/observations/locations/{location_id}.
+
+    The ``datetime`` query window follows the input's
+    ``retention.keep_for_seconds``.
+    """
 
     location_id: str
     standard_name: str = "DBZH"
     fmt: str = "ODIM"
     method: Literal["comp", "scan"] = "comp"
-    lookback_minutes: int = 30
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class S3PrefixQuery:
+    """List objects under date-partitioned prefixes in a public S3 bucket.
+
+    OPERA composites use keys like
+    ``{YYYY}/{MM}/{DD}/OPERA/COMP/OPERA@{YYYYMMDD}T{HHMM}@0@DBZH.h5`` (5-minute
+    grid). The CloudFerro ``openradar-24h`` bucket allows anonymous listing and
+    download — a useful bypass when the MeteoGate ORD API is down (observed
+    2026-08: gateway 502 while S3 stayed up). Note that S3 only helps if
+    upstream is still *writing* objects; an ingest stall leaves both paths stale.
+
+    Discovery window is the input's ``retention.keep_for_seconds`` (not a
+    separate lookback field).
+    """
+
+    key_infix: str = "OPERA/COMP"
+    # Extra filename needle besides ``@{quantity}`` (composite elevation token).
+    name_contains: str = "@0@"
     notes: str = ""
 
 
@@ -322,7 +359,7 @@ class InputConfig:
     quantity: str = "DBZH"
     odim_product: str | None = None
     timestamp_from_name: Callable[[str], datetime | None] = timestamp_from_yyyymmddhhmmss
-    remote_query: OrdItemsQuery | OrdLocationQuery | None = None
+    remote_query: OrdItemsQuery | OrdLocationQuery | S3PrefixQuery | None = None
     availability: InputAvailabilityPolicy = InputAvailabilityPolicy()
     retention: RetentionPolicy = RetentionPolicy()
     status: Literal["ready", "provisional"] = "ready"
@@ -510,6 +547,15 @@ ord_api = OrdApiSource(
     polling=ORD_SMART_POLLING,
 )
 
+# Public ORD rolling archive on CloudFerro. Not in SOURCES — dormant backup only.
+ord_s3 = S3BucketSource(
+    id="ord_s3",
+    label="EUMETNET ORD CloudFerro rolling bucket (public)",
+    endpoint_url="https://s3.waw3-1.cloudferro.com",
+    bucket="openradar-24h",
+    polling=ORD_SMART_POLLING,
+)
+
 arco_radar = ArcoZarrSource(
     id="arco_radar",
     label="MeteoHub ARCO radar (DPC SRI, Zarr)",
@@ -620,6 +666,30 @@ opera_dbzh = InputConfig(
         method="comp",
         notes="Use this as the reliable ORD-backed input for countries without confirmed national feeds.",
     ),
+)
+
+# Backup OPERA discovery via the public CloudFerro rolling bucket (no API key).
+# Disabled and omitted from SOURCES so it never polls. Shares local_dir with
+# opera_dbzh so downloads are interchangeable. To plug in when ORD API fails:
+#   1. set enabled=True
+#   2. add ord_s3 to SOURCES
+#   3. swap product inputs(...) from opera_dbzh -> opera_dbzh_s3
+# Key pattern: {YYYY}/{MM}/{DD}/OPERA/COMP/OPERA@{YYYYMMDD}T{HHMM}@0@DBZH.h5
+opera_dbzh_s3 = InputConfig(
+    id="opera_dbzh_s3",
+    label="EUMETNET OPERA DBZH composite (S3 bucket backup)",
+    source=ord_s3,
+    local_dir=DATA_DIR / "opera" / "dbzh",
+    timestamp_from_name=timestamp_from_ord_name,
+    remote_query=S3PrefixQuery(
+        key_infix="OPERA/COMP",
+        name_contains="@0@",
+        notes=(
+            "Anonymous ListObjectsV2 + GET against openradar-24h. Bypass for "
+            "MeteoGate ORD API outages; useless if OPERA ingest itself has stalled."
+        ),
+    ),
+    enabled=False,
 )
 
 # Italian DPC national radar composite, pulled from MeteoHub's live ARCO Zarr
@@ -1051,7 +1121,9 @@ central_europe_forecast = ForecastProduct(
 
 
 SOURCES: tuple[SourceConfig, ...] = (chmi_current, chmi_cappi, ord_api, arco_radar)
-INPUTS: tuple[InputConfig, ...] = (cz_cappi, cz_maxz, opera_dbzh, it_sri_arco)
+# opera_dbzh_s3 stays in INPUTS (enabled=False) so the backup remains discoverable;
+# ord_s3 is intentionally absent from SOURCES until the backup is plugged in.
+INPUTS: tuple[InputConfig, ...] = (cz_cappi, cz_maxz, opera_dbzh, opera_dbzh_s3, it_sri_arco)
 COUNTRY_PRODUCTS: tuple[ProductConfig, ...] = (
     cz_product,
     de_product,
