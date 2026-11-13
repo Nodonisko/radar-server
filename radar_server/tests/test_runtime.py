@@ -331,6 +331,39 @@ def test_run_forever_starts_and_shuts_down_cleanly(tmp_path: Path) -> None:
     assert not any(worker.is_alive() for worker in runtime.render_workers)
 
 
+def test_startup_polls_inputs_while_mqtt_broker_is_unreachable(tmp_path: Path, monkeypatch) -> None:
+    from threading import Event
+
+    from paho.mqtt.client import Client
+
+    from radar_server.config import opera_dbzh
+
+    config, _input_config = _config(tmp_path)
+    runtime = RadarRuntime(config, now=NOW)
+    broker_attempted = Event()
+    input_polled = Event()
+
+    def unreachable_broker(client):
+        broker_attempted.set()
+        raise TimeoutError("broker unavailable")
+
+    def sync_input(cfg, *, now=None, limit=None):
+        input_polled.set()
+        return []
+
+    monkeypatch.setattr(Client, "_create_socket_connection", unreachable_broker)
+    monkeypatch.setattr(runtime.mqtt, "default_policy", lambda: opera_dbzh.source.notifications[0])
+    runtime.download_worker.sync_func = sync_input
+    try:
+        runtime.start()
+        assert broker_attempted.wait(timeout=2)
+        assert input_polled.wait(timeout=2)
+        assert runtime.mqtt.is_stale()
+        assert runtime.download_worker.is_alive()
+    finally:
+        runtime.shutdown()
+
+
 def test_run_forever_shuts_down_on_interrupt(tmp_path: Path) -> None:
     config, _input_config = _config(tmp_path)
     runtime = RadarRuntime(config, now=NOW)

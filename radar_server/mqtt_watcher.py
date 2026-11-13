@@ -89,7 +89,9 @@ class MqttWatcher:
             raise ValueError("no MQTT notification policy configured")
 
         client = self._build_client(policy)
-        client.connect(policy.host, policy.port)
+        # Let paho's network loop retry even the first connection. A broker
+        # outage must not prevent startup reconciliation or polling fallback.
+        client.connect_async(policy.host, policy.port)
         client.loop_start()
         self._client = client
         return client
@@ -107,7 +109,7 @@ class MqttWatcher:
             raise ValueError("no MQTT notification policy configured")
 
         client = self._build_client(policy)
-        client.connect(policy.host, policy.port)
+        client.connect_async(policy.host, policy.port)
         self._client = client
         client.loop_forever(retry_first_connection=True)
 
@@ -125,6 +127,10 @@ class MqttWatcher:
         topics = _subscription_topics(self.inputs, policy)
 
         def on_connect(client, userdata, flags, reason_code, properties):  # noqa: ANN001
+            if reason_code != 0:
+                self.connected = False
+                LOGGER.warning("MQTT connection rejected by %s:%s (%s)", policy.host, policy.port, reason_code)
+                return
             self.connected = True
             LOGGER.info("Connected to MQTT %s:%s (%s)", policy.host, policy.port, reason_code)
             for topic in topics:
@@ -134,6 +140,10 @@ class MqttWatcher:
         def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):  # noqa: ANN001
             self.connected = False
             LOGGER.warning("Disconnected from MQTT %s:%s (%s)", policy.host, policy.port, reason_code)
+
+        def on_connect_fail(client, userdata):  # noqa: ANN001
+            self.connected = False
+            LOGGER.warning("MQTT connection to %s:%s failed; retrying in background", policy.host, policy.port)
 
         def on_message(client, userdata, message):  # noqa: ANN001
             try:
@@ -150,6 +160,7 @@ class MqttWatcher:
 
         client.on_connect = on_connect
         client.on_disconnect = on_disconnect
+        client.on_connect_fail = on_connect_fail
         client.on_message = on_message
         return client
 

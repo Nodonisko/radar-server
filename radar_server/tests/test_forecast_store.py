@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -171,6 +172,41 @@ def test_prune_forecast_fields_deletes_old_and_unreadable(tmp_path: Path) -> Non
     assert set(deleted) == {old_path, corrupt}
     assert not old_path.exists()
     assert recent_path.exists()
+
+
+def test_prune_tolerates_part_renamed_by_writer(tmp_path: Path, monkeypatch) -> None:
+    forecast = _forecast(tmp_path)
+    forecast.field_dir.mkdir(parents=True)
+    part = forecast.field_dir / "completed.npz.part"
+    final = part.with_suffix("")
+    part.write_bytes(b"completed field")
+    original_stat = Path.stat
+
+    def rename_before_stat(path, *args, **kwargs):
+        if path == part and part in forecast.field_dir.glob("*.part"):
+            part.replace(final)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", rename_before_stat)
+
+    assert forecast_store.prune_forecast_fields([forecast], now=ISSUE) == ()
+    assert final.read_bytes() == b"completed field"
+
+
+def test_prune_removes_stale_parts_and_preserves_active_writes(tmp_path: Path) -> None:
+    forecast = _forecast(tmp_path)
+    forecast.field_dir.mkdir(parents=True)
+    stale = forecast.field_dir / "stale.npz.part"
+    active = forecast.field_dir / "active.npz.part"
+    for path in (stale, active):
+        path.write_bytes(b"partial field")
+    now = ISSUE.replace(tzinfo=timezone.utc).timestamp()
+    os.utime(stale, (now - forecast_store._STALE_PART_SECONDS - 1,) * 2)
+    os.utime(active, (now,) * 2)
+
+    assert forecast_store.prune_forecast_fields([forecast], now=ISSUE) == (stale,)
+    assert not stale.exists()
+    assert active.exists()
 
 
 def test_expected_forecast_paths_covers_all_minutes_and_variants(tmp_path: Path) -> None:

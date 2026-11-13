@@ -242,7 +242,11 @@ def prune_forecast_fields(
                 path.unlink(missing_ok=True)
                 deleted.append(path)
         for part in sorted(forecast.field_dir.glob(f"*{_PART_SUFFIX}")):
-            modified = datetime.utcfromtimestamp(part.stat().st_mtime)
+            try:
+                modified = datetime.utcfromtimestamp(part.stat().st_mtime)
+            except FileNotFoundError:
+                # A writer can atomically rename a completed field after glob.
+                continue
             if modified < reference - timedelta(seconds=_STALE_PART_SECONDS):
                 part.unlink(missing_ok=True)
                 deleted.append(part)

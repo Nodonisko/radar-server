@@ -142,7 +142,9 @@ MQTT / polling (main thread, networking only)
      pysteps motion + extrapolation -> fields to disk -> forecast render tasks
 ```
 
-`run` starts MQTT and then immediately runs startup backfill.
+`run` starts MQTT in the background and then immediately runs startup backfill.
+If the broker is unreachable, MQTT retries with backoff while polling, rendering,
+and uploads continue. A rejected MQTT connection also leaves polling fallback active.
 
 ## Concurrency
 
